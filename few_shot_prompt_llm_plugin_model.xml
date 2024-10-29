@@ -1,0 +1,795 @@
+<?xml version='1.0' encoding='utf-8'?>
+<few_shot_prompt>
+<plugin name="llm-claude-3">
+<readme>
+  # llm-claude-3
+  
+  [![PyPI](https://img.shields.io/pypi/v/llm-claude-3.svg)](https://pypi.org/project/llm-claude-3/)
+  [![Changelog](https://img.shields.io/github/v/release/simonw/llm-claude-3?include_prereleases&amp;label=changelog)](https://github.com/simonw/llm-claude-3/releases)
+  [![Tests](https://github.com/simonw/llm-claude-3/actions/workflows/test.yml/badge.svg)](https://github.com/simonw/llm-claude-3/actions/workflows/test.yml)
+  [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](https://github.com/simonw/llm-claude-3/blob/main/LICENSE)
+  
+  LLM access to Claude 3 by Anthropic
+  
+  ## Installation
+  
+  Install this plugin in the same environment as [LLM](https://llm.datasette.io/).
+  ```bash
+  llm install llm-claude-3
+  ```
+  ## Usage
+  
+  First, set [an API key](https://console.anthropic.com/settings/keys) for Claude 3:
+  ```bash
+  llm keys set claude
+  # Paste key here
+  ```
+  
+  Run `llm models` to list the models, and `llm models --options` to include a list of their options.
+  
+  Run prompts like this:
+  ```bash
+  llm -m claude-3.5-sonnet 'Fun facts about pelicans'
+  llm -m claude-3-opus 'Fun facts about squirrels'
+  llm -m claude-3-sonnet 'Fun facts about walruses'
+  llm -m claude-3-haiku 'Fun facts about armadillos'
+  ```
+  
+  ## Development
+  
+  To set up this plugin locally, first checkout the code. Then create a new virtual environment:
+  ```bash
+  cd llm-claude-3
+  python3 -m venv venv
+  source venv/bin/activate
+  ```
+  Now install the dependencies and test dependencies:
+  ```bash
+  llm install -e '.[test]'
+  ```
+  To run the tests:
+  ```bash
+  pytest
+  ```
+  
+</readme>
+<python_file name="llm_claude_3.py">
+  from anthropic import Anthropic
+  import llm
+  from pydantic import Field, field_validator, model_validator
+  from typing import Optional, List
+  
+  
+  @llm.hookimpl
+  def register_models(register):
+      # https://docs.anthropic.com/claude/docs/models-overview
+      register(ClaudeMessages("claude-3-opus-20240229"))
+      register(ClaudeMessages("claude-3-opus-latest"), aliases=("claude-3-opus",))
+      register(ClaudeMessages("claude-3-sonnet-20240229"), aliases=("claude-3-sonnet",))
+      register(ClaudeMessages("claude-3-haiku-20240307"), aliases=("claude-3-haiku",))
+      # 3.5 models
+      register(ClaudeMessagesLong("claude-3-5-sonnet-20240620"))
+      register(ClaudeMessagesLong("claude-3-5-sonnet-20241022"))
+      register(
+          ClaudeMessagesLong("claude-3-5-sonnet-latest"), aliases=("claude-3.5-sonnet", "claude-3.5-sonnet-latest")
+      )
+      # register(
+      #     ClaudeMessagesLong("claude-3-5-haiku-latest"), aliases=("claude-3.5-haiku",)
+      # )
+  
+  
+  class ClaudeOptions(llm.Options):
+      max_tokens: Optional[int] = Field(
+          description="The maximum number of tokens to generate before stopping",
+          default=4_096,
+      )
+  
+      temperature: Optional[float] = Field(
+          description="Amount of randomness injected into the response. Defaults to 1.0. Ranges from 0.0 to 1.0. Use temperature closer to 0.0 for analytical / multiple choice, and closer to 1.0 for creative and generative tasks. Note that even with temperature of 0.0, the results will not be fully deterministic.",
+          default=1.0,
+      )
+  
+      top_p: Optional[float] = Field(
+          description="Use nucleus sampling. In nucleus sampling, we compute the cumulative distribution over all the options for each subsequent token in decreasing probability order and cut it off once it reaches a particular probability specified by top_p. You should either alter temperature or top_p, but not both. Recommended for advanced use cases only. You usually only need to use temperature.",
+          default=None,
+      )
+  
+      top_k: Optional[int] = Field(
+          description="Only sample from the top K options for each subsequent token. Used to remove 'long tail' low probability responses. Recommended for advanced use cases only. You usually only need to use temperature.",
+          default=None,
+      )
+  
+      user_id: Optional[str] = Field(
+          description="An external identifier for the user who is associated with the request",
+          default=None,
+      )
+  
+      @field_validator("max_tokens")
+      @classmethod
+      def validate_max_tokens(cls, max_tokens):
+          real_max = cls.model_fields["max_tokens"].default
+          if not (0 &lt; max_tokens &lt;= real_max):
+              raise ValueError("max_tokens must be in range 1-{}".format(real_max))
+          return max_tokens
+  
+      @field_validator("temperature")
+      @classmethod
+      def validate_temperature(cls, temperature):
+          if not (0.0 &lt;= temperature &lt;= 1.0):
+              raise ValueError("temperature must be in range 0.0-1.0")
+          return temperature
+  
+      @field_validator("top_p")
+      @classmethod
+      def validate_top_p(cls, top_p):
+          if top_p is not None and not (0.0 &lt;= top_p &lt;= 1.0):
+              raise ValueError("top_p must be in range 0.0-1.0")
+          return top_p
+  
+      @field_validator("top_k")
+      @classmethod
+      def validate_top_k(cls, top_k):
+          if top_k is not None and top_k &lt;= 0:
+              raise ValueError("top_k must be a positive integer")
+          return top_k
+  
+      @model_validator(mode="after")
+      def validate_temperature_top_p(self):
+          if self.temperature != 1.0 and self.top_p is not None:
+              raise ValueError("Only one of temperature and top_p can be set")
+          return self
+  
+  
+  class ClaudeMessages(llm.Model):
+      needs_key = "claude"
+      key_env_var = "ANTHROPIC_API_KEY"
+      can_stream = True
+  
+      class Options(ClaudeOptions): ...
+  
+      def __init__(self, model_id, claude_model_id=None, extra_headers=None):
+          self.model_id = model_id
+          self.claude_model_id = claude_model_id or model_id
+          self.extra_headers = extra_headers
+  
+      def build_messages(self, prompt, conversation) -&gt; List[dict]:
+          messages = []
+          if conversation:
+              for response in conversation.responses:
+                  messages.extend(
+                      [
+                          {
+                              "role": "user",
+                              "content": response.prompt.prompt,
+                          },
+                          {"role": "assistant", "content": response.text()},
+                      ]
+                  )
+          messages.append({"role": "user", "content": prompt.prompt})
+          return messages
+  
+      def execute(self, prompt, stream, response, conversation):
+          client = Anthropic(api_key=self.get_key())
+  
+          kwargs = {
+              "model": self.claude_model_id,
+              "messages": self.build_messages(prompt, conversation),
+              "max_tokens": prompt.options.max_tokens,
+          }
+          if prompt.options.user_id:
+              kwargs["metadata"] = {"user_id": prompt.options.user_id}
+  
+          if prompt.options.top_p:
+              kwargs["top_p"] = prompt.options.top_p
+          else:
+              kwargs["temperature"] = prompt.options.temperature
+  
+          if prompt.options.top_k:
+              kwargs["top_k"] = prompt.options.top_k
+  
+          if prompt.system:
+              kwargs["system"] = prompt.system
+  
+          if self.extra_headers:
+              kwargs["extra_headers"] = self.extra_headers
+  
+          if stream:
+              with client.messages.stream(**kwargs) as stream:
+                  for text in stream.text_stream:
+                      yield text
+                  # This records usage and other data:
+                  response.response_json = stream.get_final_message().model_dump()
+          else:
+              completion = client.messages.create(**kwargs)
+              yield completion.content[0].text
+              response.response_json = completion.model_dump()
+  
+      def __str__(self):
+          return "Anthropic Messages: {}".format(self.model_id)
+  
+  
+  class ClaudeMessagesLong(ClaudeMessages):
+      class Options(ClaudeOptions):
+          max_tokens: Optional[int] = Field(
+              description="The maximum number of tokens to generate before stopping",
+              default=4_096 * 2,
+          )
+  
+</python_file>
+</plugin>
+<plugin name="llm-command-r">
+<readme>
+  # llm-command-r
+  
+  [![PyPI](https://img.shields.io/pypi/v/llm-command-r.svg)](https://pypi.org/project/llm-command-r/)
+  [![Changelog](https://img.shields.io/github/v/release/simonw/llm-command-r?include_prereleases&amp;label=changelog)](https://github.com/simonw/llm-command-r/releases)
+  [![Tests](https://github.com/simonw/llm-command-r/actions/workflows/test.yml/badge.svg)](https://github.com/simonw/llm-command-r/actions/workflows/test.yml)
+  [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](https://github.com/simonw/llm-command-r/blob/main/LICENSE)
+  
+  Access the [Cohere Command R](https://docs.cohere.com/docs/command-r) family of models via the Cohere API
+  
+  ## Installation
+  
+  Install this plugin in the same environment as [LLM](https://llm.datasette.io/).
+  ```bash
+  llm install llm-command-r
+  ```
+  
+  ## Configuration
+  
+  You will need a [Cohere API key](https://dashboard.cohere.com/api-keys). Configure it like this:
+  
+  ```bash
+  llm keys set cohere
+  # Paste key here
+  ```
+  
+  ## Usage
+  
+  This plugin adds two models.
+  
+  ```bash
+  llm -m command-r 'Say hello from Command R'
+  llm -m command-r-plus 'Say hello from Command R Plus'
+  ```
+  
+  The Command R models have the ability to search the web as part of answering a prompt.
+  
+  You can enable this feature using the `-o websearch 1` option to the models:
+  
+  ```bash
+  llm -m command-r 'What is the LLM CLI tool?' -o websearch 1
+  ```
+  Running a search costs more as it involves spending tokens including the search results in the prompt.
+  
+  The full search results are stored as JSON [in the LLM logs](https://llm.datasette.io/en/stable/logging.html).
+  
+  You can also use the `command-r-search` command provided by this plugin to see a list of documents that were used to answer your question as part of the output:
+  
+  ```bash
+  llm command-r-search 'What is the LLM CLI tool by simonw?'
+  ```
+  Example output:
+  
+  &gt; The LLM CLI tool is a command-line utility that allows users to access large language models. It was created by Simon Willison and can be installed via pip, Homebrew or pipx. The tool supports interactions with remote APIs and models that can be locally installed and run. Users can run prompts from the command line and even build an image search engine using the CLI tool.
+  &gt;
+  &gt; Sources:
+  &gt;
+  &gt; - GitHub - simonw/llm: Access large language models from the command-line - https://github.com/simonw/llm
+  &gt; - llm, ttok and strip-tags—CLI tools for working with ChatGPT and other LLMs - https://simonwillison.net/2023/May/18/cli-tools-for-llms/
+  &gt; - Sherwood Callaway on LinkedIn: GitHub - simonw/llm: Access large language models from the command-line - https://www.linkedin.com/posts/sherwoodcallaway_github-simonwllm-access-large-language-activity-7104448041041960960-2WRG
+  &gt; - LLM Python/CLI tool adds support for embeddings | Hacker News - https://news.ycombinator.com/item?id=37384797
+  &gt; - CLI tools for working with ChatGPT and other LLMs | Hacker News - https://news.ycombinator.com/item?id=35994037
+  &gt; - GitHub - simonw/homebrew-llm: Homebrew formulas for installing LLM and related tools - https://github.com/simonw/homebrew-llm
+  &gt; - LLM: A CLI utility and Python library for interacting with Large Language Models - https://llm.datasette.io/en/stable/
+  &gt; - GitHub - simonw/llm-prompts: A collection of prompts for use with the LLM CLI tool - https://github.com/simonw/llm-prompts
+  &gt; - GitHub - simonw/llm-cmd: Use LLM to generate and execute commands in your shell - https://github.com/simonw/llm-cmd
+  
+  ## Development
+  
+  To set up this plugin locally, first checkout the code. Then create a new virtual environment:
+  ```bash
+  cd llm-command-r
+  python3 -m venv venv
+  source venv/bin/activate
+  ```
+  Now install the dependencies and test dependencies:
+  ```bash
+  llm install -e '.[test]'
+  ```
+  To run the tests:
+  ```bash
+  pytest
+  ```
+  
+</readme>
+<python_file name="llm_command_r.py">
+  import click
+  import cohere
+  import llm
+  from pydantic import Field
+  import sqlite_utils
+  import sys
+  from typing import Optional, List
+  
+  
+  @llm.hookimpl
+  def register_commands(cli):
+      @cli.command()
+      @click.argument("prompt")
+      @click.option("-s", "--system", help="System prompt to use")
+      @click.option("model_id", "-m", "--model", help="Model to use")
+      @click.option(
+          "options",
+          "-o",
+          "--option",
+          type=(str, str),
+          multiple=True,
+          help="key/value options for the model",
+      )
+      @click.option("-n", "--no-log", is_flag=True, help="Don't log to database")
+      @click.option("--key", help="API key to use")
+      def command_r_search(prompt, system, model_id, options, no_log, key):
+          "Prompt Command R with the web search feature"
+          from llm.cli import logs_on, logs_db_path
+          from llm.migrations import migrate
+  
+          model_id = model_id or "command-r"
+          model = llm.get_model(model_id)
+          if model.needs_key:
+              model.key = llm.get_key(key, model.needs_key, model.key_env_var)
+          validated_options = {}
+          options = list(options)
+          options.append(("websearch", "1"))
+          try:
+              validated_options = dict(
+                  (key, value)
+                  for key, value in model.Options(**dict(options))
+                  if value is not None
+              )
+          except pydantic.ValidationError as ex:
+              raise click.ClickException(render_errors(ex.errors()))
+          response = model.prompt(prompt, system=system, **validated_options)
+          for chunk in response:
+              print(chunk, end="")
+              sys.stdout.flush()
+  
+          # Log to the database
+          if (logs_on() or log) and not no_log:
+              log_path = logs_db_path()
+              (log_path.parent).mkdir(parents=True, exist_ok=True)
+              db = sqlite_utils.Database(log_path)
+              migrate(db)
+              response.log_to_db(db)
+  
+          # Now output the citations
+          documents = response.response_json.get("documents", [])
+          if documents:
+              print()
+              print()
+              print("Sources:")
+              print()
+              for doc in documents:
+                  print("-", doc["title"], "-", doc["url"])
+  
+  
+  @llm.hookimpl
+  def register_models(register):
+      # https://docs.cohere.com/docs/models
+      register(CohereMessages("command-r"), aliases=("r",))
+      register(CohereMessages("command-r-plus"), aliases=("r-plus",))
+  
+  
+  class CohereMessages(llm.Model):
+      needs_key = "cohere"
+      key_env_var = "COHERE_API_KEY"
+      can_stream = True
+  
+      class Options(llm.Options):
+          websearch: Optional[bool] = Field(
+              description="Use web search connector",
+              default=False,
+          )
+  
+      def __init__(self, model_id):
+          self.model_id = model_id
+  
+      def build_chat_history(self, conversation) -&gt; List[dict]:
+          chat_history = []
+          if conversation:
+              for response in conversation.responses:
+                  chat_history.extend(
+                      [
+                          {"role": "USER", "text": response.prompt.prompt},
+                          {"role": "CHATBOT", "text": response.text()},
+                      ]
+                  )
+          return chat_history
+  
+      def execute(self, prompt, stream, response, conversation):
+          client = cohere.Client(self.get_key())
+          kwargs = {
+              "message": prompt.prompt,
+              "model": self.model_id,
+          }
+          if prompt.system:
+              kwargs["preamble"] = prompt.system
+  
+          if conversation:
+              kwargs["chat_history"] = self.build_chat_history(conversation)
+  
+          if prompt.options.websearch:
+              kwargs["connectors"] = [{"id": "web-search"}]
+  
+          if stream:
+              for event in client.chat_stream(**kwargs):
+                  if event.event_type == "text-generation":
+                      yield event.text
+                  elif event.event_type == "stream-end":
+                      response.response_json = event.response.dict()
+          else:
+              event = client.chat(**kwargs)
+              answer = event.text
+              yield answer
+              response.response_json = event.dict()
+  
+      def __str__(self):
+          return "Cohere Messages: {}".format(self.model_id)
+  
+</python_file>
+</plugin>
+<plugin name="llm-mistral">
+<readme>
+  # llm-mistral
+  
+  [![PyPI](https://img.shields.io/pypi/v/llm-mistral.svg)](https://pypi.org/project/llm-mistral/)
+  [![Changelog](https://img.shields.io/github/v/release/simonw/llm-mistral?include_prereleases&amp;label=changelog)](https://github.com/simonw/llm-mistral/releases)
+  [![Tests](https://github.com/simonw/llm-mistral/workflows/Test/badge.svg)](https://github.com/simonw/llm-mistral/actions?query=workflow%3ATest)
+  [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](https://github.com/simonw/llm-mistral/blob/main/LICENSE)
+  
+  [LLM](https://llm.datasette.io/) plugin providing access to [Mistral](https://mistral.ai) models using the Mistral API
+  
+  ## Installation
+  
+  Install this plugin in the same environment as LLM:
+  ```bash
+  llm install llm-mistral
+  ```
+  ## Usage
+  
+  First, obtain an API key for [the Mistral API](https://console.mistral.ai/).
+  
+  Configure the key using the `llm keys set mistral` command:
+  ```bash
+  llm keys set mistral
+  ```
+  ```
+  &lt;paste key here&gt;
+  ```
+  You can now access the Mistral hosted models. Run `llm models` for a list.
+  
+  To run a prompt through `mistral-tiny`:
+  
+  ```bash
+  llm -m mistral-tiny 'A sassy name for a pet sasquatch'
+  ```
+  To start an interactive chat session with `mistral-small`:
+  ```bash
+  llm chat -m mistral-small
+  ```
+  ```
+  Chatting with mistral-small
+  Type 'exit' or 'quit' to exit
+  Type '!multi' to enter multiple lines, then '!end' to finish
+  &gt; three proud names for a pet walrus
+  1. "Nanuq," the Inuit word for walrus, which symbolizes strength and resilience.
+  2. "Sir Tuskalot," a playful and regal name that highlights the walrus' distinctive tusks.
+  3. "Glacier," a name that reflects the walrus' icy Arctic habitat and majestic presence.
+  ```
+  To use a system prompt with `mistral-medium` to explain some code:
+  ```bash
+  cat example.py | llm -m mistral-medium -s 'explain this code'
+  ```
+  ## Model options
+  
+  All three models accept the following options, using `-o name value` syntax:
+  
+  - `-o temperature 0.7`: The sampling temperature, between 0 and 1. Higher increases randomness, lower values are more focused and deterministic.
+  - `-o top_p 0.1`: 0.1 means consider only tokens in the top 10% probability mass. Use this or temperature but not both.
+  - `-o max_tokens 20`: Maximum number of tokens to generate in the completion.
+  - `-o safe_mode 1`: Turns on [safe mode](https://docs.mistral.ai/platform/guardrailing/), which adds a system prompt to add guardrails to the model output.
+  - `-o random_seed 123`: Set an integer random seed to generate deterministic results.
+  
+  ## Refreshing the model list
+  
+  Mistral sometimes release new models.
+  
+  To make those models available to an existing installation of `llm-mistral` run this command:
+  ```bash
+  llm mistral refresh
+  ```
+  This will fetch and cache the latest list of available models. They should then become available in the output of the `llm models` command.
+  
+  ## Embeddings
+  
+  The Mistral [Embeddings API](https://docs.mistral.ai/platform/client#embeddings) can be used to generate 1,024 dimensional embeddings for any text.
+  
+  To embed a single string:
+  
+  ```bash
+  llm embed -m mistral-embed -c 'this is text'
+  ```
+  This will return a JSON array of 1,024 floating point numbers.
+  
+  The [LLM documentation](https://llm.datasette.io/en/stable/embeddings/index.html) has more, including how to embed in bulk and store the results in a SQLite database.
+  
+  See [LLM now provides tools for working with embeddings](https://simonwillison.net/2023/Sep/4/llm-embeddings/) and [Embeddings: What they are and why they matter](https://simonwillison.net/2023/Oct/23/embeddings/) for more about embeddings.
+  
+  ## Development
+  
+  To set up this plugin locally, first checkout the code. Then create a new virtual environment:
+  ```bash
+  cd llm-mistral
+  python3 -m venv venv
+  source venv/bin/activate
+  ```
+  Now install the dependencies and test dependencies:
+  ```bash
+  llm install -e '.[test]'
+  ```
+  To run the tests:
+  ```bash
+  pytest
+  ```
+  
+</readme>
+<python_file name="llm_mistral.py">
+  import click
+  from httpx_sse import connect_sse
+  import httpx
+  import json
+  import llm
+  from pydantic import Field
+  from typing import Optional
+  
+  
+  DEFAULT_ALIASES = {
+      "mistral/mistral-tiny": "mistral-tiny",
+      "mistral/open-mistral-nemo": "mistral-nemo",
+      "mistral/mistral-small": "mistral-small",
+      "mistral/mistral-medium": "mistral-medium",
+      "mistral/mistral-large-latest": "mistral-large",
+      "mistral/codestral-mamba-latest": "codestral-mamba",
+      "mistral/codestral-latest": "codestral",
+      "mistral/ministral-3b-latest": "ministral-3b",
+      "mistral/ministral-8b-latest": "ministral-8b",
+  }
+  
+  
+  @llm.hookimpl
+  def register_models(register):
+      for model_id in get_model_ids():
+          our_model_id = "mistral/" + model_id
+          alias = DEFAULT_ALIASES.get(our_model_id)
+          aliases = [alias] if alias else []
+          register(Mistral(our_model_id, model_id), aliases=aliases)
+  
+  
+  @llm.hookimpl
+  def register_embedding_models(register):
+      register(MistralEmbed())
+  
+  
+  def refresh_models():
+      user_dir = llm.user_dir()
+      mistral_models = user_dir / "mistral_models.json"
+      key = llm.get_key("", "mistral", "LLM_MISTRAL_KEY")
+      if not key:
+          raise click.ClickException(
+              "You must set the 'mistral' key or the LLM_MISTRAL_KEY environment variable."
+          )
+      response = httpx.get(
+          "https://api.mistral.ai/v1/models", headers={"Authorization": f"Bearer {key}"}
+      )
+      response.raise_for_status()
+      models = response.json()
+      mistral_models.write_text(json.dumps(models, indent=2))
+      return models
+  
+  
+  def get_model_ids():
+      user_dir = llm.user_dir()
+      models = {
+          "data": [
+              {"id": model_id.replace("mistral/", "")}
+              for model_id in DEFAULT_ALIASES.keys()
+          ]
+      }
+      mistral_models = user_dir / "mistral_models.json"
+      if mistral_models.exists():
+          models = json.loads(mistral_models.read_text())
+      elif llm.get_key("", "mistral", "LLM_MISTRAL_KEY"):
+          try:
+              models = refresh_models()
+          except httpx.HTTPStatusError:
+              pass
+      return [model["id"] for model in models["data"] if "embed" not in model["id"]]
+  
+  
+  @llm.hookimpl
+  def register_commands(cli):
+      @cli.group()
+      def mistral():
+          "Commands relating to the llm-mistral plugin"
+  
+      @mistral.command()
+      def refresh():
+          "Refresh the list of available Mistral models"
+          before = set(get_model_ids())
+          refresh_models()
+          after = set(get_model_ids())
+          added = after - before
+          removed = before - after
+          if added:
+              click.echo(f"Added models: {', '.join(added)}", err=True)
+          if removed:
+              click.echo(f"Removed models: {', '.join(removed)}", err=True)
+          if added or removed:
+              click.echo("New list of models:", err=True)
+              for model_id in get_model_ids():
+                  click.echo(model_id, err=True)
+          else:
+              click.echo("No changes", err=True)
+  
+  
+  class Mistral(llm.Model):
+      can_stream = True
+  
+      class Options(llm.Options):
+          temperature: Optional[float] = Field(
+              description=(
+                  "Determines the sampling temperature. Higher values like 0.8 increase randomness, "
+                  "while lower values like 0.2 make the output more focused and deterministic."
+              ),
+              ge=0,
+              le=1,
+              default=0.7,
+          )
+          top_p: Optional[float] = Field(
+              description=(
+                  "Nucleus sampling, where the model considers the tokens with top_p probability mass. "
+                  "For example, 0.1 means considering only the tokens in the top 10% probability mass."
+              ),
+              ge=0,
+              le=1,
+              default=1,
+          )
+          max_tokens: Optional[int] = Field(
+              description="The maximum number of tokens to generate in the completion.",
+              ge=0,
+              default=None,
+          )
+          safe_mode: Optional[bool] = Field(
+              description="Whether to inject a safety prompt before all conversations.",
+              default=False,
+          )
+          random_seed: Optional[int] = Field(
+              description="Sets the seed for random sampling to generate deterministic results.",
+              default=None,
+          )
+  
+      def __init__(self, our_model_id, mistral_model_id):
+          self.model_id = our_model_id
+          self.mistral_model_id = mistral_model_id
+  
+      def build_messages(self, prompt, conversation):
+          messages = []
+          if not conversation:
+              if prompt.system:
+                  messages.append({"role": "system", "content": prompt.system})
+              messages.append({"role": "user", "content": prompt.prompt})
+              return messages
+          current_system = None
+          for prev_response in conversation.responses:
+              if (
+                  prev_response.prompt.system
+                  and prev_response.prompt.system != current_system
+              ):
+                  messages.append(
+                      {"role": "system", "content": prev_response.prompt.system}
+                  )
+                  current_system = prev_response.prompt.system
+              messages.append({"role": "user", "content": prev_response.prompt.prompt})
+              messages.append({"role": "assistant", "content": prev_response.text()})
+          if prompt.system and prompt.system != current_system:
+              messages.append({"role": "system", "content": prompt.system})
+          messages.append({"role": "user", "content": prompt.prompt})
+          return messages
+  
+      def execute(self, prompt, stream, response, conversation):
+          key = llm.get_key("", "mistral", "LLM_MISTRAL_KEY") or getattr(
+              self, "key", None
+          )
+          messages = self.build_messages(prompt, conversation)
+          response._prompt_json = {"messages": messages}
+          body = {
+              "model": self.mistral_model_id,
+              "messages": messages,
+          }
+          if prompt.options.temperature:
+              body["temperature"] = prompt.options.temperature
+          if prompt.options.top_p:
+              body["top_p"] = prompt.options.top_p
+          if prompt.options.max_tokens:
+              body["max_tokens"] = prompt.options.max_tokens
+          if prompt.options.safe_mode:
+              body["safe_mode"] = prompt.options.safe_mode
+          if prompt.options.random_seed:
+              body["random_seed"] = prompt.options.random_seed
+          if stream:
+              body["stream"] = True
+              with httpx.Client() as client:
+                  with connect_sse(
+                      client,
+                      "POST",
+                      "https://api.mistral.ai/v1/chat/completions",
+                      headers={
+                          "Content-Type": "application/json",
+                          "Accept": "application/json",
+                          "Authorization": f"Bearer {key}",
+                      },
+                      json=body,
+                      timeout=None,
+                  ) as event_source:
+                      # In case of unauthorized:
+                      event_source.response.raise_for_status()
+                      for sse in event_source.iter_sse():
+                          if sse.data != "[DONE]":
+                              try:
+                                  yield sse.json()["choices"][0]["delta"]["content"]
+                              except KeyError:
+                                  pass
+          else:
+              with httpx.Client() as client:
+                  api_response = client.post(
+                      "https://api.mistral.ai/v1/chat/completions",
+                      headers={
+                          "Content-Type": "application/json",
+                          "Accept": "application/json",
+                          "Authorization": f"Bearer {key}",
+                      },
+                      json=body,
+                      timeout=None,
+                  )
+                  api_response.raise_for_status()
+                  yield api_response.json()["choices"][0]["message"]["content"]
+                  response.response_json = api_response.json()
+  
+  
+  class MistralEmbed(llm.EmbeddingModel):
+      model_id = "mistral-embed"
+      batch_size = 10
+  
+      def embed_batch(self, texts):
+          key = llm.get_key("", "mistral", "LLM_MISTRAL_KEY")
+          with httpx.Client() as client:
+              api_response = client.post(
+                  "https://api.mistral.ai/v1/embeddings",
+                  headers={
+                      "Content-Type": "application/json",
+                      "Accept": "application/json",
+                      "Authorization": f"Bearer {key}",
+                  },
+                  json={
+                      "model": "mistral-embed",
+                      "input": list(texts),
+                      "encoding_format": "float",
+                  },
+                  timeout=None,
+              )
+              api_response.raise_for_status()
+              return [item["embedding"] for item in api_response.json()["data"]]
+  
+</python_file>
+</plugin>
+</few_shot_prompt>

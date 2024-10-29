@@ -1,0 +1,30 @@
+[project]
+name = "llm-plugin-generator"
+version = "0.1"
+description = "LLM plugin to generate few-shot prompts for plugin creation"
+readme = "README.md"
+authors = [{name = "Thomas Thomas Hughes"}]
+license = {text = "Apache-2.0"}
+classifiers = [
+    "License :: OSI Approved :: Apache Software License"
+]
+dependencies = [
+    "llm",
+    "click",
+    "gitpython",
+]
+
+[project.urls]
+Homepage = "https://github.com/irthomasthomas/llm-plugin-generator"
+Changelog = "https://github.com/irthomasthomas/llm-plugin-generator/releases"
+Issues = "https://github.com/irthomasthomas/llm-plugin-generator/issues"
+
+[project.entry-points.llm]
+plugin-generator = "llm_plugin_generator"
+
+[project.optional-dependencies]
+test = ["pytest"]
+
+[tool.pytest.ini_options]
+addopts = "--assert=plain"
+pythonpath = "."
