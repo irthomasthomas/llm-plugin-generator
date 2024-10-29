@@ -3,7 +3,7 @@ name = "llm-plugin-generator"
 version = "0.1"
 description = "LLM plugin to generate few-shot prompts for plugin creation"
 readme = "README.md"
-authors = [{name = "Thomas Thomas Hughes"}]
+authors = [{name = "llm-plugin-generator"}]
 license = {text = "Apache-2.0"}
 classifiers = [
     "License :: OSI Approved :: Apache Software License"
