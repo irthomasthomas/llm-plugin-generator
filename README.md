@@ -39,12 +39,12 @@ Examples:
 llm generate-plugin "Create a plugin that translates text to emoji" --output-dir ./my-new-plugin --type utility --model gpt-4
 ```
 
-2. Using input files and specifying reasoning level:
-```bash
-llm generate-plugin "LLM plugin generator plugin." /home/ShellLM/Projects/claude.sh/llm_plugin_generator/llm_plugin_generator/pyproject.toml /home/ShellLM/Projects/claude.sh/llm_plugin_generator/llm_plugin_generator/llm_plugin_generator.py --output-dir new-plugin-generator --type utility -m claude-3.5-sonnet
+2. Using a prompt and input files - Generating plugin from a README.md
+```
+llm generate-plugin "Few-shot Prompt Generator. Call it llm-few-shot-generator" 'files/README.md' --output-dir plugins/Utilities/few-shot-generator --type utility -m claude-3.5-sonnet
 ```
 
-This will generate a new LLM plugin based on the provided description and/or input files, including the main plugin file, README.md, and pyproject.toml. The files will be saved in the specified output directory.
+This will generate a new LLM plugin based on the provided description and/or input files. The files will be saved in the specified output directory.
 
 ## Features
 
