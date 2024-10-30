@@ -32,6 +32,11 @@ Options:
 - `--model`, `-m`: Model to use for generation
 - `--reasoning`: Reasoning level for the AI (1-9)
 
+## --type
+ --type model will use a few-shot prompt focused on llm model plugins. 
+ --type utility uses one focuse on utilities.
+ leaving off --type will use a default prompt that combines all off them. I suggest picking one.
+ 
 Examples:
 
 1. Basic usage:
