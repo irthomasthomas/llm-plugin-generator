@@ -10,7 +10,6 @@ DEFAULT_FEW_SHOT_PROMPT_FILE = "few_shot_prompt_llm_plugin_all.xml"
 MODEL_FEW_SHOT_PROMPT_FILE = "few_shot_prompt_llm_plugin_model.xml"
 UTILITY_FEW_SHOT_PROMPT_FILE = "few_shot_prompt_llm_plugin_utility.xml"
 
-
 def read_few_shot_prompt(file_name):
     try:
         return resources.read_text("llm_plugin_generator", file_name)
