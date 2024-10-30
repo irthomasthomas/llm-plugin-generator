@@ -3,22 +3,21 @@ import click
 import os
 from pathlib import Path
 import toml
+from importlib import resources
 
-# Get the directory of this python file
-plugin_dir = Path(__file__).parent
+# Update these lines to use just the filename
+DEFAULT_FEW_SHOT_PROMPT_FILE = "few_shot_prompt_llm_plugin_all.xml"
+MODEL_FEW_SHOT_PROMPT_FILE = "few_shot_prompt_llm_plugin_model.xml"
+UTILITY_FEW_SHOT_PROMPT_FILE = "few_shot_prompt_llm_plugin_utility.xml"
 
-# Update the default few-shot prompt files
-DEFAULT_FEW_SHOT_PROMPT_FILE = plugin_dir / "few_shot_prompt_llm_plugin_all.xml"
-MODEL_FEW_SHOT_PROMPT_FILE = plugin_dir / "few_shot_prompt_llm_plugin_model.xml"
-UTILITY_FEW_SHOT_PROMPT_FILE = plugin_dir / "few_shot_prompt_llm_plugin_utility.xml"
 
-def read_few_shot_prompt(file_path):
-    if file_path.exists():
-        with file_path.open("r") as f:
-            return f.read()
-    else:
-        click.echo(f"Warning: Few-shot prompt file not found at {file_path}.")
+def read_few_shot_prompt(file_name):
+    try:
+        return resources.read_text("llm_plugin_generator", file_name)
+    except FileNotFoundError:
+        click.echo(f"Warning: Few-shot prompt file not found: {file_name}.")
         return ""
+
 
 def write_main_python_file(content, output_dir, filename):
     main_file = output_dir / filename
