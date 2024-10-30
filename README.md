@@ -30,7 +30,6 @@ Options:
 - `--output-dir`: Directory to save generated plugin files (default: current directory)
 - `--type`: Type of plugin to generate (default, model, or utility)
 - `--model`, `-m`: Model to use for generation
-- `--reasoning`: Reasoning level for the AI (1-9)
 
 ## --type
  --type model will use a few-shot prompt focused on llm model plugins. 
