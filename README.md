@@ -5,7 +5,7 @@
 [![Tests](https://github.com/irthomasthomas/llm-plugin-generator/workflows/Test/badge.svg)](https://github.com/irthomasthomas/llm-plugin-generator/actions?query=workflow%3ATest)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](https://github.com/irthomasthomas/llm-plugin-generator/blob/main/LICENSE)
 
-LLM plugin to generate few-shot prompts for plugin creation
+LLM plugin to generate plugins for LLM
 
 ## Installation
 
