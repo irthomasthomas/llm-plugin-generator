@@ -34,8 +34,8 @@ Options:
 
 ## --type
  --type model will use a few-shot prompt focused on llm model plugins. 
- --type utility uses one focuse on utilities.
- leaving off --type will use a default prompt that combines all off them. I suggest picking one.
+ --type utility focuses on utilities.
+ leaving off --type will use a default prompt that combines all off them. I suggest picking one of the focused options which should be faster.
  
 Examples:
 
