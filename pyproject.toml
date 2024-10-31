@@ -25,7 +25,7 @@ dependencies = [
 ]
 
 [tool.setuptools.package-data]
-llm_plugin_generator = ["*.xml"]
+llm_plugin_generator = ["**/*.xml"]
 
 [tool.setuptools]
 include-package-data = true
