@@ -40,7 +40,7 @@ Examples:
 
 1. Basic usage:
 ```bash
-llm generate-plugin "Create a plugin that translates text to emoji" --output-dir ./my-new-plugin --type utility --model gpt-4
+llm generate-plugin "Create a plugin that translates text to emoji" --output-dir ./my-new-plugin --type utility --model claude-3.5-sonnet
 ```
 
 2. Using a prompt and input files - Generating plugin from a README.md
