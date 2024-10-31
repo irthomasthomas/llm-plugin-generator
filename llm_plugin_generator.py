@@ -11,8 +11,11 @@ MODEL_FEW_SHOT_PROMPT_FILE = "few_shot_prompt_llm_plugin_model.xml"
 UTILITY_FEW_SHOT_PROMPT_FILE = "few_shot_prompt_llm_plugin_utility.xml"
 
 def read_few_shot_prompt(file_name):
-    with resources.open_text("llm_plugin_generator", file_name) as file:
-        return file.read()
+    try:
+        return resources.read_text("llm_plugin_generator", file_name)
+    except FileNotFoundError:
+        click.echo(f"Warning: Few-shot prompt file not found: {file_name}.")
+        return ""
 
 
 def write_main_python_file(content, output_dir, filename):

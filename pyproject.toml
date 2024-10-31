@@ -15,7 +15,7 @@ dependencies = [
 ]
 
 [tool.setuptools.package-data]
-llm_plugin_generator = ["**/*.xml"]
+"llm_plugin_generator" = ["*.xml"]
 
 [project.urls]
 Homepage = "https://github.com/irthomasthomas/llm-plugin-generator"
