@@ -5,7 +5,7 @@
 [![Tests](https://github.com/irthomasthomas/llm-plugin-generator/workflows/Test/badge.svg)](https://github.com/irthomasthomas/llm-plugin-generator/actions?query=workflow%3ATest)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](https://github.com/irthomasthomas/llm-plugin-generator/blob/main/LICENSE)
 
-LLM plugin to generate few-shot prompts for plugin creation
+LLM plugin to generate plugins for LLM
 
 ## Installation
 
@@ -30,8 +30,12 @@ Options:
 - `--output-dir`: Directory to save generated plugin files (default: current directory)
 - `--type`: Type of plugin to generate (default, model, or utility)
 - `--model`, `-m`: Model to use for generation
-- `--reasoning`: Reasoning level for the AI (1-9)
 
+## --type
+ --type model will use a few-shot prompt focused on llm model plugins. 
+ --type utility focuses on utilities.
+ leaving off --type will use a default prompt that combines all off them. I suggest picking one of the focused options which should be faster.
+ 
 Examples:
 
 1. Basic usage:
