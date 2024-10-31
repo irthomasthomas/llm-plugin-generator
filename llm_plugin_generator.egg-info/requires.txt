@@ -1,9 +1,0 @@
-llm
-click
-toml
-
-[:python_version < "3.9"]
-importlib-resources
-
-[test]
-pytest

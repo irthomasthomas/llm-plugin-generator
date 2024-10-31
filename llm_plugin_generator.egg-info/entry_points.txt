@@ -1,2 +1,0 @@
-[llm]
-llm_plugin_generator = llm_plugin_generator
