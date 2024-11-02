@@ -1,0 +1,6 @@
+llm
+click
+gitpython
+
+[test]
+pytest
