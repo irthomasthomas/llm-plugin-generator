@@ -1,7 +1,8 @@
 import llm
 import click
 import os
-from pathlib import Path
+import pathlib
+import sqlite_utils
 import toml
 from importlib import resources
 
@@ -10,10 +11,21 @@ DEFAULT_FEW_SHOT_PROMPT_FILE = "few_shot_prompt_llm_plugin_all.xml"
 MODEL_FEW_SHOT_PROMPT_FILE = "few_shot_prompt_llm_plugin_model.xml"
 UTILITY_FEW_SHOT_PROMPT_FILE = "few_shot_prompt_llm_plugin_utility.xml"
 
+def user_dir():
+    llm_user_path = os.environ.get("LLM_USER_PATH")
+    if llm_user_path:
+        path = pathlib.Path(llm_user_path)
+    else:
+        path = pathlib.Path(click.get_app_dir("io.datasette.llm"))
+    path.mkdir(exist_ok=True, parents=True)
+    return path
+
+def logs_db_path():
+    return user_dir() / "logs.db"
+
 def read_few_shot_prompt(file_name):
     with resources.open_text("llm_plugin_generator", file_name) as file:
         return file.read()
-
 
 def write_main_python_file(content, output_dir, filename):
     main_file = output_dir / filename
@@ -71,7 +83,6 @@ def register_commands(cli):
 
 """
         if prompt:
-            print(f"Prompt: {prompt}")
             input_content += f"""Additional prompt:
 {prompt}
 """
@@ -80,8 +91,8 @@ def register_commands(cli):
             input_content = click.prompt("Enter your plugin description or requirements")
         
         llm_model = llm.get_model(model)
-        response = llm_model.prompt(
-            f"""Generate a new LLM plugin based on the following few-shot examples and the given input:
+        db = sqlite_utils.Database("")
+        full_prompt = f"""Generate a new LLM plugin based on the following few-shot examples and the given input:
 Few-shot examples:
 {few_shot_prompt}
 
@@ -91,11 +102,13 @@ Input:
 Generate the plugin code, including the main plugin file, README.md, and pyproject.toml. 
 Ensure the generated plugin follows best practices and is fully functional. 
 Provide the content for each file separately, enclosed in XML tags like <plugin_py>, <readme_md>, and <pyproject_toml>."""
-        )
         
+        db = sqlite_utils.Database(logs_db_path())
+        response = llm_model.prompt(full_prompt)
+        response.log_to_db(db)
         generated_plugin = response.text()
         
-        output_path = Path(output_dir)
+        output_path = pathlib.Path(output_dir)
         output_path.mkdir(parents=True, exist_ok=True)
         
         plugin_py_content = extract_content(generated_plugin, "plugin_py")

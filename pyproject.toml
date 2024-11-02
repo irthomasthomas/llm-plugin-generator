@@ -1,6 +1,6 @@
 [project]
 name = "llm-plugin-generator"
-version = "0.4"
+version = "0.5"
 description = "LLM plugin to generate few-shot prompts for plugin creation"
 readme = "README.md"
 authors = [{name = "llm-plugin-generator"}]
