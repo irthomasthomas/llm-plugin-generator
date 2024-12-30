@@ -1,6 +1,631 @@
 <?xml version='1.0' encoding='utf-8'?>
 <few_shot_prompt>
+<plugin name="llm-plugin-generator">
+<python_file name="init.py">
+    import llm
+    import click
+    import os
+    import pathlib
+    import sqlite_utils
+    import toml
+    from importlib import resources
+
+    # Update these lines to use just the filename
+    DEFAULT_FEW_SHOT_PROMPT_FILE = "few_shot_prompt_llm_plugin_all.xml"
+    MODEL_FEW_SHOT_PROMPT_FILE = "few_shot_prompt_llm_plugin_model.xml"
+    UTILITY_FEW_SHOT_PROMPT_FILE = "few_shot_prompt_llm_plugin_utility.xml"
+
+    def user_dir():
+        llm_user_path = os.environ.get("LLM_USER_PATH")
+        if llm_user_path:
+            path = pathlib.Path(llm_user_path)
+        else:
+            path = pathlib.Path(click.get_app_dir("io.datasette.llm"))
+        path.mkdir(exist_ok=True, parents=True)
+        return path
+
+    def logs_db_path():
+        return user_dir() / "logs.db"
+
+    def read_few_shot_prompt(file_name):
+        with resources.open_text("llm_plugin_generator", file_name) as file:
+            return file.read()
+
+    def write_main_python_file(content, output_dir, filename):
+        main_file = output_dir / filename
+        with main_file.open("w") as f:
+            f.write(content)
+        click.echo(f"Main Python file written to {main_file}")
+
+    def write_readme(content, output_dir):
+        readme_file = output_dir / "README.md"
+        with readme_file.open("w") as f:
+            f.write(content)
+        click.echo(f"README file written to {readme_file}")
+
+    def write_pyproject_toml(content, output_dir):
+        pyproject_file = output_dir / "pyproject.toml"
+        with pyproject_file.open("w") as f:
+            f.write(content)
+        click.echo(f"pyproject.toml file written to {pyproject_file}")
+
+    def extract_plugin_name(pyproject_content):
+        try:
+            pyproject_dict = toml.loads(pyproject_content)
+            name = pyproject_dict['project']['name']
+            # Convert kebab-case to snake_case
+            return name.replace('-', '_')
+        except:
+            # If parsing fails, return a default name
+            return "plugin"
+
+    @llm.hookimpl
+    def register_commands(cli):
+        @cli.command()
+        @click.argument("prompt", required=False)
+        @click.argument("input_files", nargs=-1, type=click.Path(exists=True))
+        @click.option("--output-dir", type=click.Path(), default=".", help="Directory to save generated plugin files")
+        @click.option("--type", default="default", type=click.Choice(["default", "model", "utility"]), help="Type of plugin to generate")
+        @click.option("--model", "-m", help="Model to use")
+        def generate_plugin(prompt, input_files, output_dir, type, model):
+            """Generate a new LLM plugin based on examples and a prompt or README file(s)."""
+            # Select the appropriate few-shot prompt file based on the type
+            if type == "model":
+                few_shot_file = MODEL_FEW_SHOT_PROMPT_FILE
+            elif type == "utility":
+                few_shot_file = UTILITY_FEW_SHOT_PROMPT_FILE
+            else:
+                few_shot_file = DEFAULT_FEW_SHOT_PROMPT_FILE
+
+            few_shot_prompt = read_few_shot_prompt(few_shot_file)
+            
+            input_content = ""
+            for input_file in input_files:
+                with open(input_file, "r") as f:
+                    input_content += f"""Content from {input_file}:
+    {f.read()}
+
+    """
+            if prompt:
+                input_content += f"""Additional prompt:
+    {prompt}
+    """
+
+            if not input_content:
+                input_content = click.prompt("Enter your plugin description or requirements")
+            
+            llm_model = llm.get_model(model)
+            db = sqlite_utils.Database("")
+            full_prompt = f"""Generate a new LLM plugin based on the following few-shot examples and the given input:
+    Few-shot examples:
+    {few_shot_prompt}
+
+    Input:
+    {input_content}
+
+    Generate the plugin code, including the main plugin file, README.md, and pyproject.toml. 
+    Ensure the generated plugin follows best practices and is fully functional. 
+    Provide the content for each file separately, enclosed in XML tags like <plugin_py>, <readme_md>, and <pyproject_toml>."""
+            
+            db = sqlite_utils.Database(logs_db_path())
+            response = llm_model.prompt(full_prompt)
+            response.log_to_db(db)
+            generated_plugin = response.text()
+            
+            output_path = pathlib.Path(output_dir)
+            output_path.mkdir(parents=True, exist_ok=True)
+            
+            plugin_py_content = extract_content(generated_plugin, "plugin_py")
+            readme_content = extract_content(generated_plugin, "readme_md")
+            pyproject_content = extract_content(generated_plugin, "pyproject_toml")
+            
+            # Extract the plugin name from pyproject.toml
+            plugin_name = extract_plugin_name(pyproject_content)
+            
+            # Use the extracted name for the main Python file
+            write_main_python_file(plugin_py_content, output_path, f"{plugin_name}.py")
+            write_readme(readme_content, output_path)
+            write_pyproject_toml(pyproject_content, output_path)
+            
+            click.echo("Plugin generation completed.")
+
+    def extract_content(text, tag):
+        start_tag = f"<{tag}>"
+        end_tag = f"</{tag}>"
+        start = text.find(start_tag) + len(start_tag)
+        end = text.find(end_tag)
+        return text[start:end].strip()
+
+    @llm.hookimpl
+    def register_models(register):
+        pass  # No custom models to register for this plugin
+
+    @llm.hookimpl
+    def register_prompts(register):
+        pass  # No custom prompts to register for this plugin
+
+</python_file>
+<readme>
+    # llm-plugin-generator
+
+    [![PyPI](https://img.shields.io/pypi/v/llm-plugin-generator.svg)](https://pypi.org/project/llm-plugin-generator/)
+    [![Changelog](https://img.shields.io/github/v/release/irthomasthomas/llm-plugin-generator?include_prereleases&label=changelog)](https://github.com/irthomasthomas/llm-plugin-generator/releases)
+    [![Tests](https://github.com/irthomasthomas/llm-plugin-generator/workflows/Test/badge.svg)](https://github.com/irthomasthomas/llm-plugin-generator/actions?query=workflow%3ATest)
+    [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](https://github.com/irthomasthomas/llm-plugin-generator/blob/main/LICENSE)
+
+    LLM plugin to generate plugins for LLM
+
+    ## Installation
+
+    Install this plugin in the same environment as LLM:
+
+    ```bash
+    llm install llm-plugin-generator
+    ```
+
+    ## Usage
+
+    To generate a new LLM plugin, use the `generate-plugin` command:
+
+    ```bash
+    llm generate-plugin "Description of your plugin"
+    ```
+
+    Options:
+
+    - `PROMPT`: Description of your plugin (optional)
+    - `INPUT_FILES`: Path(s) to input README or prompt file(s) (optional, multiple allowed)
+    - `--output-dir`: Directory to save generated plugin files (default: current directory)
+    - `--type`: Type of plugin to generate (default, model, or utility)
+    - `--model`, `-m`: Model to use for generation
+
+    ## --type
+    --type model will use a few-shot prompt focused on llm model plugins. 
+    --type utility focuses on utilities.
+    leaving off --type will use a default prompt that combines all off them. I suggest picking one of the focused options which should be faster.
+    
+    Examples:
+
+    1. Basic usage:
+    ```bash
+    llm generate-plugin "Create a plugin that translates text to emoji" --output-dir ./my-new-plugin --type utility --model gpt-4
+    ```
+
+    2. Using a prompt and input files - Generating plugin from a README.md
+    ```
+    llm generate-plugin "Few-shot Prompt Generator. Call it llm-few-shot-generator" \
+    'files/README.md' --output-dir plugins/Utilities/few-shot-generator \
+    --type utility -m claude-3.5-sonnet
+    ```
+
+    3. Using websites or remote files:
+    ```
+    llm generate-plugin "Write an llm-cerebras plugin from these docs: $(curl -s https://raw.githubusercontent.com/irthomasthomas/llm-cerebras/refs/heads/main/.artefacts/cerebras-api-notes.txt)" \
+    --output-dir llm-cerebras  --type model -m sonnet-3.5 
+    ```
+
+    This will generate a new LLM plugin based on the provided description and/or input files. The files will be saved in the specified output directory.
+
+    ## Features
+    # New: Requests are now logged to the llm db.
+    - Generates fully functional LLM plugins based on descriptions or input files
+    - Supports different plugin types: default, model, and utility
+    - Uses few-shot learning with predefined examples for better generation
+    - Allows specifying custom output directory
+    - Compatible with various LLM models
+    - Generates main plugin file, README.md, and pyproject.toml
+    - Extracts plugin name from generated pyproject.toml for consistent naming
+
+    ## Development
+
+    To set up this plugin locally, first checkout the code. Then create a new virtual environment:
+
+    ```bash
+    cd llm-plugin-generator
+    python -m venv venv
+    source venv/bin/activate
+    ```
+
+    Now install the dependencies and test dependencies:
+
+    ```bash
+    pip install -e '.[test]'
+    ```
+
+    To run the tests:
+
+    ```bash
+    pytest
+    ```
+
+    ## Contributing
+
+    Contributions to llm-plugin-generator are welcome! Please refer to the [GitHub repository](https://github.com/irthomasthomas/llm-plugin-generator) for more information on how to contribute.
+
+    ## License
+
+    This project is licensed under the Apache License 2.0. See the [LICENSE](LICENSE) file for details.
+
+</readme>
+</plugin>
+<plugin name="llm-fewshot-generator">
+<python_file name="llm_fewshot.py">
+  import llm
+  import click
+  import os
+  import pathlib
+  import sqlite_utils
+  import toml
+  from importlib import resources
+  
+  # Update these lines to use just the filename
+  DEFAULT_FEW_SHOT_PROMPT_FILE = "few_shot_prompt_llm_plugin_all.xml"
+  MODEL_FEW_SHOT_PROMPT_FILE = "few_shot_prompt_llm_plugin_model.xml"
+  UTILITY_FEW_SHOT_PROMPT_FILE = "few_shot_prompt_llm_plugin_utility.xml"
+  
+  def user_dir():
+      llm_user_path = os.environ.get("LLM_USER_PATH")
+      if llm_user_path:
+          path = pathlib.Path(llm_user_path)
+      else:
+          path = pathlib.Path(click.get_app_dir("io.datasette.llm"))
+      path.mkdir(exist_ok=True, parents=True)
+      return path
+  
+  def logs_db_path():
+      return user_dir() / "logs.db"
+  
+  def read_few_shot_prompt(file_name):
+      with resources.open_text("llm_plugin_generator", file_name) as file:
+          return file.read()
+  
+  def write_main_python_file(content, output_dir, filename):
+      main_file = output_dir / filename
+      with main_file.open("w") as f:
+          f.write(content)
+      click.echo(f"Main Python file written to {main_file}")
+  
+  def write_readme(content, output_dir):
+      readme_file = output_dir / "README.md"
+      with readme_file.open("w") as f:
+          f.write(content)
+      click.echo(f"README file written to {readme_file}")
+  
+  def write_pyproject_toml(content, output_dir):
+      pyproject_file = output_dir / "pyproject.toml"
+      with pyproject_file.open("w") as f:
+          f.write(content)
+      click.echo(f"pyproject.toml file written to {pyproject_file}")
+  
+  def extract_plugin_name(pyproject_content):
+      try:
+          pyproject_dict = toml.loads(pyproject_content)
+          name = pyproject_dict['project']['name']
+          # Convert kebab-case to snake_case
+          return name.replace('-', '_')
+      except:
+          # If parsing fails, return a default name
+          return "plugin"
+  
+  @llm.hookimpl
+  def register_commands(cli):
+      @cli.command()
+      @click.argument("prompt", required=False)
+      @click.argument("input_files", nargs=-1, type=click.Path(exists=True))
+      @click.option("--output-dir", type=click.Path(), default=".", help="Directory to save generated plugin files")
+      @click.option("--type", default="default", type=click.Choice(["default", "model", "utility"]), help="Type of plugin to generate")
+      @click.option("--model", "-m", help="Model to use")
+      def generate_plugin(prompt, input_files, output_dir, type, model):
+          """Generate a new LLM plugin based on examples and a prompt or README file(s)."""
+          # Select the appropriate few-shot prompt file based on the type
+          if type == "model":
+              few_shot_file = MODEL_FEW_SHOT_PROMPT_FILE
+          elif type == "utility":
+              few_shot_file = UTILITY_FEW_SHOT_PROMPT_FILE
+          else:
+              few_shot_file = DEFAULT_FEW_SHOT_PROMPT_FILE
+  
+          few_shot_prompt = read_few_shot_prompt(few_shot_file)
+          
+          input_content = ""
+          for input_file in input_files:
+              with open(input_file, "r") as f:
+                  input_content += f"""Content from {input_file}:
+  {f.read()}
+  
+  """
+          if prompt:
+              input_content += f"""Additional prompt:
+  {prompt}
+  """
+  
+          if not input_content:
+              input_content = click.prompt("Enter your plugin description or requirements")
+          
+          llm_model = llm.get_model(model)
+          db = sqlite_utils.Database("")
+          full_prompt = f"""Generate a new LLM plugin based on the following few-shot examples and the given input:
+  Few-shot examples:
+  {few_shot_prompt}
+  
+  Input:
+  {input_content}
+  
+  Generate the plugin code, including the main plugin file, README.md, and pyproject.toml. 
+  Ensure the generated plugin follows best practices and is fully functional. 
+  Provide the content for each file separately, enclosed in XML tags like &lt;plugin_py&gt;, &lt;readme_md&gt;, and &lt;pyproject_toml&gt;."""
+          
+          db = sqlite_utils.Database(logs_db_path())
+          response = llm_model.prompt(full_prompt)
+          response.log_to_db(db)
+          generated_plugin = response.text()
+          
+          output_path = pathlib.Path(output_dir)
+          output_path.mkdir(parents=True, exist_ok=True)
+          
+          plugin_py_content = extract_content(generated_plugin, "plugin_py")
+          readme_content = extract_content(generated_plugin, "readme_md")
+          pyproject_content = extract_content(generated_plugin, "pyproject_toml")
+          
+          # Extract the plugin name from pyproject.toml
+          plugin_name = extract_plugin_name(pyproject_content)
+          
+          # Use the extracted name for the main Python file
+          write_main_python_file(plugin_py_content, output_path, f"{plugin_name}.py")
+          write_readme(readme_content, output_path)
+          write_pyproject_toml(pyproject_content, output_path)
+          
+          click.echo("Plugin generation completed.")
+  
+  def extract_content(text, tag):
+      start_tag = f"&lt;{tag}&gt;"
+      end_tag = f"&lt;/{tag}&gt;"
+      start = text.find(start_tag) + len(start_tag)
+      end = text.find(end_tag)
+      return text[start:end].strip()
+  
+  @llm.hookimpl
+  def register_models(register):
+      pass  # No custom models to register for this plugin
+  
+  @llm.hookimpl
+  def register_prompts(register):
+      pass  # No custom prompts to register for this plugin
+  
+</python_file>
+<readme>
+  # llm-plugin-generator
+  
+  [![PyPI](https://img.shields.io/pypi/v/llm-plugin-generator.svg)](https://pypi.org/project/llm-plugin-generator/)
+  [![Changelog](https://img.shields.io/github/v/release/irthomasthomas/llm-plugin-generator?include_prereleases&amp;label=changelog)](https://github.com/irthomasthomas/llm-plugin-generator/releases)
+  [![Tests](https://github.com/irthomasthomas/llm-plugin-generator/workflows/Test/badge.svg)](https://github.com/irthomasthomas/llm-plugin-generator/actions?query=workflow%3ATest)
+  [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](https://github.com/irthomasthomas/llm-plugin-generator/blob/main/LICENSE)
+  
+  LLM plugin to generate plugins for LLM
+  
+  ## Installation
+  
+  Install this plugin in the same environment as LLM:
+  
+  ```bash
+  llm install llm-plugin-generator
+  ```
+  
+  ## Usage
+  
+  To generate a new LLM plugin, use the `generate-plugin` command:
+  
+  ```bash
+  llm generate-plugin "Description of your plugin"
+  ```
+  
+  Options:
+  
+  - `PROMPT`: Description of your plugin (optional)
+  - `INPUT_FILES`: Path(s) to input README or prompt file(s) (optional, multiple allowed)
+  - `--output-dir`: Directory to save generated plugin files (default: current directory)
+  - `--type`: Type of plugin to generate (default, model, or utility)
+  - `--model`, `-m`: Model to use for generation
+  
+  ## --type
+   --type model will use a few-shot prompt focused on llm model plugins. 
+   --type utility focuses on utilities.
+   leaving off --type will use a default prompt that combines all off them. I suggest picking one of the focused options which should be faster.
+   
+  Examples:
+  
+  1. Basic usage:
+  ```bash
+  llm generate-plugin "Create a plugin that translates text to emoji" --output-dir ./my-new-plugin --type utility --model gpt-4
+  ```
+  
+  2. Using a prompt and input files - Generating plugin from a README.md
+  ```
+  llm generate-plugin "Few-shot Prompt Generator. Call it llm-few-shot-generator" \
+  'files/README.md' --output-dir plugins/Utilities/few-shot-generator \
+  --type utility -m claude-3.5-sonnet
+  ```
+  
+  3. Using websites or remote files:
+  ```
+  llm generate-plugin "Write an llm-cerebras plugin from these docs: $(curl -s https://raw.githubusercontent.com/irthomasthomas/llm-cerebras/refs/heads/main/.artefacts/cerebras-api-notes.txt)" \
+  --output-dir llm-cerebras  --type model -m sonnet-3.5 
+  ```
+  
+  This will generate a new LLM plugin based on the provided description and/or input files. The files will be saved in the specified output directory.
+  
+  ## Features
+  # New: Requests are now logged to the llm db.
+  - Generates fully functional LLM plugins based on descriptions or input files
+  - Supports different plugin types: default, model, and utility
+  - Uses few-shot learning with predefined examples for better generation
+  - Allows specifying custom output directory
+  - Compatible with various LLM models
+  - Generates main plugin file, README.md, and pyproject.toml
+  - Extracts plugin name from generated pyproject.toml for consistent naming
+  
+  ## Development
+  
+  To set up this plugin locally, first checkout the code. Then create a new virtual environment:
+  
+  ```bash
+  cd llm-plugin-generator
+  python -m venv venv
+  source venv/bin/activate
+  ```
+  
+  Now install the dependencies and test dependencies:
+  
+  ```bash
+  pip install -e '.[test]'
+  ```
+  
+  To run the tests:
+  
+  ```bash
+  pytest
+  ```
+  
+  ## Contributing
+  
+  Contributions to llm-plugin-generator are welcome! Please refer to the [GitHub repository](https://github.com/irthomasthomas/llm-plugin-generator) for more information on how to contribute.
+  
+  ## License
+  
+  This project is licensed under the Apache License 2.0. See the [LICENSE](LICENSE) file for details.
+  
+</readme>
+</plugin>
 <plugin name="llm-cluster">
+<python_file name="llm_cluster.py">
+  import click
+  import json
+  import llm
+  import numpy as np
+  import sklearn.cluster
+  import sqlite_utils
+  import textwrap
+  
+  DEFAULT_SUMMARY_PROMPT = """
+  Short, concise title for this cluster of related documents.
+  """.strip()
+  
+  
+  @llm.hookimpl
+  def register_commands(cli):
+      @cli.command()
+      @click.argument("collection")
+      @click.argument("n", type=int)
+      @click.option(
+          "--truncate",
+          type=int,
+          default=100,
+          help="Truncate content to this many characters - 0 for no truncation",
+      )
+      @click.option(
+          "-d",
+          "--database",
+          type=click.Path(
+              file_okay=True, allow_dash=False, dir_okay=False, writable=True
+          ),
+          envvar="LLM_EMBEDDINGS_DB",
+          help="SQLite database file containing embeddings",
+      )
+      @click.option(
+          "--summary", is_flag=True, help="Generate summary title for each cluster"
+      )
+      @click.option("-m", "--model", help="LLM model to use for the summary")
+      @click.option("--prompt", help="Custom prompt to use for the summary")
+      def cluster(collection, n, truncate, database, summary, model, prompt):
+          """
+          Generate clusters from embeddings in a collection
+  
+          Example usage, to create 10 clusters:
+  
+          \b
+              llm cluster my_collection 10
+  
+          Outputs a JSON array of {"id": "cluster_id", "items": [list of items]}
+  
+          Pass --summary to generate a summary for each cluster, using the default
+          language model or the model you specify with --model.
+          """
+          from llm.cli import get_default_model, get_key
+  
+          clustering_model = sklearn.cluster.MiniBatchKMeans(n_clusters=n, n_init="auto")
+          if database:
+              db = sqlite_utils.Database(database)
+          else:
+              db = sqlite_utils.Database(llm.user_dir() / "embeddings.db")
+          rows = [
+              (row[0], llm.decode(row[1]), row[2])
+              for row in db.execute(
+                  """
+              select id, embedding, content from embeddings
+              where collection_id = (
+                  select id from collections where name = ?
+              )
+          """,
+                  [collection],
+              ).fetchall()
+          ]
+          to_cluster = np.array([item[1] for item in rows])
+          clustering_model.fit(to_cluster)
+          assignments = clustering_model.labels_
+  
+          def truncate_text(text):
+              if not text:
+                  return None
+              if truncate &gt; 0:
+                  return text[:truncate]
+              else:
+                  return text
+  
+          # Each one corresponds to an ID
+          clusters = {}
+          for (id, _, content), cluster in zip(rows, assignments):
+              clusters.setdefault(str(cluster), []).append(
+                  {"id": str(id), "content": truncate_text(content)}
+              )
+          # Re-arrange into a list
+          output_clusters = [{"id": k, "items": v} for k, v in clusters.items()]
+  
+          # Do we need to generate summaries?
+          if summary:
+              model = llm.get_model(model or get_default_model())
+              if model.needs_key:
+                  model.key = get_key("", model.needs_key, model.key_env_var)
+              prompt = prompt or DEFAULT_SUMMARY_PROMPT
+              click.echo("[")
+              for cluster, is_last in zip(
+                  output_clusters, [False] * (len(output_clusters) - 1) + [True]
+              ):
+                  click.echo("  {")
+                  click.echo('    "id": {},'.format(json.dumps(cluster["id"])))
+                  click.echo(
+                      '    "items": '
+                      + textwrap.indent(
+                          json.dumps(cluster["items"], indent=2), "    "
+                      ).lstrip()
+                      + ","
+                  )
+                  prompt_content = "\n".join(
+                      [item["content"] for item in cluster["items"] if item["content"]]
+                  )
+                  if prompt_content.strip():
+                      summary = model.prompt(
+                          prompt_content,
+                          system=prompt,
+                      ).text()
+                  else:
+                      summary = None
+                  click.echo('    "summary": {}'.format(json.dumps(summary)))
+                  click.echo("  }" + ("," if not is_last else ""))
+              click.echo("]")
+          else:
+              click.echo(json.dumps(output_clusters, indent=4))
+  
+</python_file>
 <readme>
   # llm-cluster
   
@@ -189,139 +814,60 @@
   ```bash
   pytest
   ```
-  
 </readme>
-<python_file name="llm_cluster.py">
+</plugin>
+<plugin name="llm-cmd">
+<python_file name="llm_cmd.py">
   import click
-  import json
   import llm
-  import numpy as np
-  import sklearn.cluster
-  import sqlite_utils
-  import textwrap
+  import subprocess
+  from prompt_toolkit import PromptSession
+  from prompt_toolkit.lexers import PygmentsLexer
+  from prompt_toolkit.patch_stdout import patch_stdout
+  from pygments.lexers.shell import BashLexer
   
-  DEFAULT_SUMMARY_PROMPT = """
-  Short, concise title for this cluster of related documents.
+  SYSTEM_PROMPT = """
+  Return only the command to be executed as a raw string, no string delimiters
+  wrapping it, no yapping, no markdown, no fenced code blocks, what you return
+  will be passed to subprocess.check_output() directly.
+  For example, if the user asks: undo last git commit
+  You return only: git reset --soft HEAD~1
   """.strip()
-  
   
   @llm.hookimpl
   def register_commands(cli):
       @cli.command()
-      @click.argument("collection")
-      @click.argument("n", type=int)
-      @click.option(
-          "--truncate",
-          type=int,
-          default=100,
-          help="Truncate content to this many characters - 0 for no truncation",
-      )
-      @click.option(
-          "-d",
-          "--database",
-          type=click.Path(
-              file_okay=True, allow_dash=False, dir_okay=False, writable=True
-          ),
-          envvar="LLM_EMBEDDINGS_DB",
-          help="SQLite database file containing embeddings",
-      )
-      @click.option(
-          "--summary", is_flag=True, help="Generate summary title for each cluster"
-      )
-      @click.option("-m", "--model", help="LLM model to use for the summary")
-      @click.option("--prompt", help="Custom prompt to use for the summary")
-      def cluster(collection, n, truncate, database, summary, model, prompt):
-          """
-          Generate clusters from embeddings in a collection
+      @click.argument("args", nargs=-1)
+      @click.option("-m", "--model", default=None, help="Specify the model to use")
+      @click.option("-s", "--system", help="Custom system prompt")
+      @click.option("--key", help="API key to use")
+      def cmd(args, model, system, key):
+          """Generate and execute commands in your shell"""
+          from llm.cli import get_default_model
+          prompt = " ".join(args)
+          model_id = model or get_default_model()
+          model_obj = llm.get_model(model_id)
+          if model_obj.needs_key:
+              model_obj.key = llm.get_key(key, model_obj.needs_key, model_obj.key_env_var)
+          result = model_obj.prompt(prompt, system=system or SYSTEM_PROMPT)
+          interactive_exec(str(result))
   
-          Example usage, to create 10 clusters:
-  
-          \b
-              llm cluster my_collection 10
-  
-          Outputs a JSON array of {"id": "cluster_id", "items": [list of items]}
-  
-          Pass --summary to generate a summary for each cluster, using the default
-          language model or the model you specify with --model.
-          """
-          from llm.cli import get_default_model, get_key
-  
-          clustering_model = sklearn.cluster.MiniBatchKMeans(n_clusters=n, n_init="auto")
-          if database:
-              db = sqlite_utils.Database(database)
+  def interactive_exec(command):
+      session = PromptSession(lexer=PygmentsLexer(BashLexer))
+      with patch_stdout():
+          if '\n' in command:
+              print("Multiline command - Meta-Enter or Esc Enter to execute")
+              edited_command = session.prompt("&gt; ", default=command, multiline=True)
           else:
-              db = sqlite_utils.Database(llm.user_dir() / "embeddings.db")
-          rows = [
-              (row[0], llm.decode(row[1]), row[2])
-              for row in db.execute(
-                  """
-              select id, embedding, content from embeddings
-              where collection_id = (
-                  select id from collections where name = ?
-              )
-          """,
-                  [collection],
-              ).fetchall()
-          ]
-          to_cluster = np.array([item[1] for item in rows])
-          clustering_model.fit(to_cluster)
-          assignments = clustering_model.labels_
-  
-          def truncate_text(text):
-              if not text:
-                  return None
-              if truncate &gt; 0:
-                  return text[:truncate]
-              else:
-                  return text
-  
-          # Each one corresponds to an ID
-          clusters = {}
-          for (id, _, content), cluster in zip(rows, assignments):
-              clusters.setdefault(str(cluster), []).append(
-                  {"id": str(id), "content": truncate_text(content)}
-              )
-          # Re-arrange into a list
-          output_clusters = [{"id": k, "items": v} for k, v in clusters.items()]
-  
-          # Do we need to generate summaries?
-          if summary:
-              model = llm.get_model(model or get_default_model())
-              if model.needs_key:
-                  model.key = get_key("", model.needs_key, model.key_env_var)
-              prompt = prompt or DEFAULT_SUMMARY_PROMPT
-              click.echo("[")
-              for cluster, is_last in zip(
-                  output_clusters, [False] * (len(output_clusters) - 1) + [True]
-              ):
-                  click.echo("  {")
-                  click.echo('    "id": {},'.format(json.dumps(cluster["id"])))
-                  click.echo(
-                      '    "items": '
-                      + textwrap.indent(
-                          json.dumps(cluster["items"], indent=2), "    "
-                      ).lstrip()
-                      + ","
-                  )
-                  prompt_content = "\n".join(
-                      [item["content"] for item in cluster["items"] if item["content"]]
-                  )
-                  if prompt_content.strip():
-                      summary = model.prompt(
-                          prompt_content,
-                          system=prompt,
-                      ).text()
-                  else:
-                      summary = None
-                  click.echo('    "summary": {}'.format(json.dumps(summary)))
-                  click.echo("  }" + ("," if not is_last else ""))
-              click.echo("]")
-          else:
-              click.echo(json.dumps(output_clusters, indent=4))
-  
+              edited_command = session.prompt("&gt; ", default=command)
+      try:
+          output = subprocess.check_output(
+              edited_command, shell=True, stderr=subprocess.STDOUT
+          )
+          print(output.decode())
+      except subprocess.CalledProcessError as e:
+          print(f"Command failed with error (exit status {e.returncode}): {e.output.decode()}")
 </python_file>
-</plugin>
-<plugin name="llm-cmd">
 <readme>
   # llm-cmd
   
@@ -381,137 +927,9 @@
   ```bash
   pytest
   ```
-  
 </readme>
-<python_file name="llm_cmd.py">
-  import click
-  import llm
-  import subprocess
-  from prompt_toolkit import PromptSession
-  from prompt_toolkit.lexers import PygmentsLexer
-  from prompt_toolkit.patch_stdout import patch_stdout
-  from pygments.lexers.shell import BashLexer
-  
-  SYSTEM_PROMPT = """
-  Return only the command to be executed as a raw string, no string delimiters
-  wrapping it, no yapping, no markdown, no fenced code blocks, what you return
-  will be passed to subprocess.check_output() directly.
-  For example, if the user asks: undo last git commit
-  You return only: git reset --soft HEAD~1
-  """.strip()
-  
-  @llm.hookimpl
-  def register_commands(cli):
-      @cli.command()
-      @click.argument("args", nargs=-1)
-      @click.option("-m", "--model", default=None, help="Specify the model to use")
-      @click.option("-s", "--system", help="Custom system prompt")
-      @click.option("--key", help="API key to use")
-      def cmd(args, model, system, key):
-          """Generate and execute commands in your shell"""
-          from llm.cli import get_default_model
-          prompt = " ".join(args)
-          model_id = model or get_default_model()
-          model_obj = llm.get_model(model_id)
-          if model_obj.needs_key:
-              model_obj.key = llm.get_key(key, model_obj.needs_key, model_obj.key_env_var)
-          result = model_obj.prompt(prompt, system=system or SYSTEM_PROMPT)
-          interactive_exec(str(result))
-  
-  def interactive_exec(command):
-      session = PromptSession(lexer=PygmentsLexer(BashLexer))
-      with patch_stdout():
-          if '\n' in command:
-              print("Multiline command - Meta-Enter or Esc Enter to execute")
-              edited_command = session.prompt("&gt; ", default=command, multiline=True)
-          else:
-              edited_command = session.prompt("&gt; ", default=command)
-      try:
-          output = subprocess.check_output(
-              edited_command, shell=True, stderr=subprocess.STDOUT
-          )
-          print(output.decode())
-      except subprocess.CalledProcessError as e:
-          print(f"Command failed with error (exit status {e.returncode}): {e.output.decode()}")
-</python_file>
 </plugin>
 <plugin name="llm-jq">
-<readme>
-  # llm-jq
-  
-  [![PyPI](https://img.shields.io/pypi/v/llm-jq.svg)](https://pypi.org/project/llm-jq/)
-  [![Changelog](https://img.shields.io/github/v/release/simonw/llm-jq?include_prereleases&amp;label=changelog)](https://github.com/simonw/llm-jq/releases)
-  [![Tests](https://github.com/simonw/llm-jq/actions/workflows/test.yml/badge.svg)](https://github.com/simonw/llm-jq/actions/workflows/test.yml)
-  [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](https://github.com/simonw/llm-jq/blob/main/LICENSE)
-  
-  Write and execute jq programs with the help of LLM
-  
-  See [Run a prompt to generate and execute jq programs using llm-jq](https://simonwillison.net/2024/Oct/27/llm-jq/) for background on this project.
-  
-  ## Installation
-  
-  Install this plugin in the same environment as [LLM](https://llm.datasette.io/).
-  ```bash
-  llm install llm-jq
-  ```
-  ## Usage
-  
-  Pipe JSON directly into `llm jq` and describe the result you would like:
-  
-  ```bash
-  curl -s https://api.github.com/repos/simonw/datasette/issues | \
-    llm jq 'count by user.login, top 3'
-  ```
-  Output:
-  ```json
-  [
-    {
-      "login": "simonw",
-      "count": 11
-    },
-    {
-      "login": "king7532",
-      "count": 5
-    },
-    {
-      "login": "dependabot[bot]",
-      "count": 2
-    }
-  ]
-  ```
-  ```
-  group_by(.user.login) | map({login: .[0].user.login, count: length}) | sort_by(-.count) | .[0:3]
-  ```
-  The JSON is printed to standard output, the jq program is printed to standard error.
-  
-  Options:
-  
-  - `-s/--silent`: Do not print the jq program to standard error
-  - `-o/--output`: Output just the jq program, do not run it
-  - `-v/--verbose`: Show the prompt sent to the model and the response
-  - `-m/--model X`: Use a model other than the configured LLM default model
-  - `-l/--length X`: Use a length of the input other than 1024 as the example
-  
-  By default, the first 1024 bytes of JSON will be sent to the model as an example along with your description. You can use `-l` to send more or less example data.
-  
-  ## Development
-  
-  To set up this plugin locally, first checkout the code. Then create a new virtual environment:
-  ```bash
-  cd llm-jq
-  python -m venv venv
-  source venv/bin/activate
-  ```
-  Now install the dependencies and test dependencies:
-  ```bash
-  llm install -e '.[test]'
-  ```
-  To run the tests:
-  ```bash
-  python -m pytest
-  ```
-  
-</readme>
 <python_file name="llm_jq.py">
   import click
   import llm
@@ -656,56 +1074,69 @@
               process.stderr.close()
   
 </python_file>
-</plugin>
-<plugin name="llm-whisper-api">
 <readme>
-  # llm-whisper-api
+  # llm-jq
   
-  [![PyPI](https://img.shields.io/pypi/v/llm-whisper-api.svg)](https://pypi.org/project/llm-whisper-api/)
-  [![Changelog](https://img.shields.io/github/v/release/simonw/llm-whisper-api?include_prereleases&amp;label=changelog)](https://github.com/simonw/llm-whisper-api/releases)
-  [![Tests](https://github.com/simonw/llm-whisper-api/actions/workflows/test.yml/badge.svg)](https://github.com/simonw/llm-whisper-api/actions/workflows/test.yml)
-  [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](https://github.com/simonw/llm-whisper-api/blob/main/LICENSE)
+  [![PyPI](https://img.shields.io/pypi/v/llm-jq.svg)](https://pypi.org/project/llm-jq/)
+  [![Changelog](https://img.shields.io/github/v/release/simonw/llm-jq?include_prereleases&amp;label=changelog)](https://github.com/simonw/llm-jq/releases)
+  [![Tests](https://github.com/simonw/llm-jq/actions/workflows/test.yml/badge.svg)](https://github.com/simonw/llm-jq/actions/workflows/test.yml)
+  [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](https://github.com/simonw/llm-jq/blob/main/LICENSE)
   
-  Run transcriptions using the OpenAI Whisper API
+  Write and execute jq programs with the help of LLM
+  
+  See [Run a prompt to generate and execute jq programs using llm-jq](https://simonwillison.net/2024/Oct/27/llm-jq/) for background on this project.
   
   ## Installation
   
   Install this plugin in the same environment as [LLM](https://llm.datasette.io/).
   ```bash
-  llm install llm-whisper-api
+  llm install llm-jq
   ```
   ## Usage
   
-  The plugin adds a new command, `llm whisper-api`. Use it like this:
+  Pipe JSON directly into `llm jq` and describe the result you would like:
   
   ```bash
-  llm whisper-api audio.mp3
+  curl -s https://api.github.com/repos/simonw/datasette/issues | \
+    llm jq 'count by user.login, top 3'
   ```
-  The transcribed audio will be output directly to standard output as plain text.
-  
-  The plugin will use the OpenAI API key you have already configured using:
-  ```bash
-  llm keys set openai
-  # Paste key here
+  Output:
+  ```json
+  [
+    {
+      "login": "simonw",
+      "count": 11
+    },
+    {
+      "login": "king7532",
+      "count": 5
+    },
+    {
+      "login": "dependabot[bot]",
+      "count": 2
+    }
+  ]
   ```
-  You can also pass an explicit API key using `--key` like this:
-  
-  ```bash
-  llm whisper-api audio.mp3 --key $OPENAI_API_KEY
   ```
-  
-  You can pipe data to the tool if you specify `-` as a filename:
-  
-  ```bash
-  curl -s 'https://static.simonwillison.net/static/2024/russian-pelican-in-spanish.mp3' \
-    | llm whisper-api -
+  group_by(.user.login) | map({login: .[0].user.login, count: length}) | sort_by(-.count) | .[0:3]
   ```
+  The JSON is printed to standard output, the jq program is printed to standard error.
+  
+  Options:
+  
+  - `-s/--silent`: Do not print the jq program to standard error
+  - `-o/--output`: Output just the jq program, do not run it
+  - `-v/--verbose`: Show the prompt sent to the model and the response
+  - `-m/--model X`: Use a model other than the configured LLM default model
+  - `-l/--length X`: Use a length of the input other than 1024 as the example
+  
+  By default, the first 1024 bytes of JSON will be sent to the model as an example along with your description. You can use `-l` to send more or less example data.
   
   ## Development
   
   To set up this plugin locally, first checkout the code. Then create a new virtual environment:
   ```bash
-  cd llm-whisper-api
+  cd llm-jq
   python -m venv venv
   source venv/bin/activate
   ```
@@ -717,8 +1148,9 @@
   ```bash
   python -m pytest
   ```
-  
 </readme>
+</plugin>
+<plugin name="llm-whisper-api">
 <python_file name="llm_whisper_api.py">
   import click
   import httpx
@@ -783,5 +1215,1681 @@
           return response.text.strip()
   
 </python_file>
+<readme>
+  # llm-whisper-api
+  
+  [![PyPI](https://img.shields.io/pypi/v/llm-whisper-api.svg)](https://pypi.org/project/llm-whisper-api/)
+  [![Changelog](https://img.shields.io/github/v/release/simonw/llm-whisper-api?include_prereleases&amp;label=changelog)](https://github.com/simonw/llm-whisper-api/releases)
+  [![Tests](https://github.com/simonw/llm-whisper-api/actions/workflows/test.yml/badge.svg)](https://github.com/simonw/llm-whisper-api/actions/workflows/test.yml)
+  [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](https://github.com/simonw/llm-whisper-api/blob/main/LICENSE)
+  
+  Run transcriptions using the OpenAI Whisper API
+  
+  ## Installation
+  
+  Install this plugin in the same environment as [LLM](https://llm.datasette.io/).
+  ```bash
+  llm install llm-whisper-api
+  ```
+  ## Usage
+  
+  The plugin adds a new command, `llm whisper-api`. Use it like this:
+  
+  ```bash
+  llm whisper-api audio.mp3
+  ```
+  The transcribed audio will be output directly to standard output as plain text.
+  
+  The plugin will use the OpenAI API key you have already configured using:
+  ```bash
+  llm keys set openai
+  # Paste key here
+  ```
+  You can also pass an explicit API key using `--key` like this:
+  
+  ```bash
+  llm whisper-api audio.mp3 --key $OPENAI_API_KEY
+  ```
+  
+  You can pipe data to the tool if you specify `-` as a filename:
+  
+  ```bash
+  curl -s 'https://static.simonwillison.net/static/2024/russian-pelican-in-spanish.mp3' \
+    | llm whisper-api -
+  ```
+  
+  ## Development
+  
+  To set up this plugin locally, first checkout the code. Then create a new virtual environment:
+  ```bash
+  cd llm-whisper-api
+  python -m venv venv
+  source venv/bin/activate
+  ```
+  Now install the dependencies and test dependencies:
+  ```bash
+  llm install -e '.[test]'
+  ```
+  To run the tests:
+  ```bash
+  python -m pytest
+  ```
+  
+</readme>
+</plugin>
+<plugin name="llm_jina">
+<python_file name="llm_jina.py">
+  import click
+  import json
+  import llm
+  import os
+  from typing import List, Dict, Any, Union
+  import httpx
+  import base64
+  
+  # Get your Jina AI API key for free: https://jina.ai/?sui=apikey
+  JINA_API_KEY = os.environ.get("JINA_API_KEY")
+  
+  @llm.hookimpl
+  def register_commands(cli):
+      @cli.group()
+      def jina():
+          """Commands for interacting with Jina AI Search Foundation APIs"""
+          pass
+  
+      @jina.command()
+      @click.argument("query", type=str)
+      @click.option("--site", help="Limit search to a specific domain")
+      @click.option("--with-links", is_flag=True, help="Include links summary")
+      @click.option("--with-images", is_flag=True, help="Include images summary")
+      def search(query: str, site: str, with_links: bool, with_images: bool):
+          """Search the web using Jina AI Search API"""
+          results = jina_search(query, site, with_links, with_images)
+          click.echo(json.dumps(results, indent=2))
+          
+      @jina.command()
+      @click.option("--content", required=True, help="The text content to segment")
+      @click.option("--tokenizer", default="cl100k_base", help="Tokenizer to use")
+      @click.option("--return-tokens", is_flag=True, help="Return tokens in the response")
+      @click.option("--return-chunks", is_flag=True, help="Return chunks in the response")
+      @click.option("--max-chunk-length", type=int, default=1000, help="Maximum characters per chunk")
+      def segment(content, tokenizer, return_tokens, return_chunks, max_chunk_length):
+          """Segment text into tokens or chunks"""
+          try:
+              result = segment_text(content, tokenizer, return_tokens, return_chunks, max_chunk_length)
+              click.echo(json.dumps(result, indent=2))
+          except click.ClickException as e:
+              click.echo(str(e), err=True)
+          except Exception as e:
+              click.echo(f"An unexpected error occurred: {str(e)}", err=True)
+  
+      @jina.command()
+      @click.argument("url", type=str)
+      @click.option("--with-links", is_flag=True, help="Include links summary")
+      @click.option("--with-images", is_flag=True, help="Include images summary")
+      def read(url: str, with_links: bool, with_images: bool):
+          """Read and parse content from a URL using Jina AI Reader API"""
+          content = jina_read(url, with_links, with_images)
+          click.echo(json.dumps(content, indent=2))
+  
+      @jina.command()
+      @click.argument("statement", type=str)
+      @click.option("--sites", help="Comma-separated list of URLs to use as grounding references")
+      def ground(statement: str, sites: str):
+          """Verify the factual accuracy of a statement using Jina AI Grounding API"""
+          result = jina_ground(statement, sites.split(",") if sites else None)
+          click.echo(json.dumps(result, indent=2))
+  
+      @jina.command()
+      @click.argument("text", type=str)
+      @click.option("--model", type=str, default="jina-embeddings-v3", help="Model to use for embedding")
+      def embed(text: str, model: str):
+          """Generate embeddings for text using Jina AI Embeddings API"""
+          embedding = jina_embed(text, model)
+          click.echo(json.dumps(embedding, indent=2))
+          
+      @jina.command()
+      @click.argument("query", type=str)
+      @click.argument("documents", nargs=-1, required=True)
+      @click.option("--model", default="jina-reranker-v2-base-multilingual", help="Reranking model to use")
+      def rerank(query: str, documents: List[str], model: str):
+          """Rerank a list of documents based on their relevance to a query"""
+          try:
+              result = rerank_documents(query, list(documents), model)
+              click.echo(json.dumps(result, indent=2))
+          except click.ClickException as e:
+              click.echo(str(e), err=True)
+          except Exception as e:
+              click.echo(f"An unexpected error occurred: {str(e)}", err=True)
+      
+      @jina.command()
+      @click.argument("prompt")
+      def generate_code(prompt):
+          """Generate Jina API code based on the given prompt"""
+          try:
+              metaprompt = jina_metaprompt()
+              full_prompt = f"""Based on the following Jina AI API documentation and guidelines, please generate production-ready Python code for the following task:
+  
+  {metaprompt}
+  
+  Task: {prompt}
+  
+  Please provide the complete Python code implementation that follows the above guidelines and best practices. Include error handling, proper API response parsing, and any necessary setup instructions.
+  
+  Remember to:
+  1. Use environment variable JINA_API_KEY for authentication
+  2. Include proper error handling
+  3. Follow the integration guidelines
+  4. Parse API responses correctly
+  5. Include any necessary imports
+  6. Add setup/usage instructions as comments
+  
+  Provide the code in a format ready to be saved to a .py file and executed."""
+              
+              response = llm.get_model().prompt(full_prompt)
+              result = response.text()
+              
+              click.echo("=== Generated Jina AI Code ===")
+              click.echo(result)
+              click.echo("Note: Make sure to set your JINA_API_KEY environment variable before running the code.")
+              click.echo("Get your API key at: https://jina.ai/?sui=apikey")
+              
+          except Exception as e:
+              raise click.ClickException(f"Error generating code: {str(e)}")
+  
+      @jina.command()
+      def metaprompt():
+          """Display the Jina metaprompt"""
+          click.echo(jina_metaprompt())
+  
+      @jina.command()
+      @click.argument("input_text", nargs=-1, required=True)
+      @click.option("--labels", required=True, help="Comma-separated list of labels for classification")
+      @click.option("--model", default="jina-embeddings-v3", help="Model to use for classification (jina-embeddings-v3 for text, jina-clip-v1 for images)")
+      @click.option("--image", is_flag=True, help="Treat input as image file paths")
+      def classify(input_text: List[str], labels: str, model: str, image: bool) -&gt; None:
+          """Classify text or images using Jina AI Classifier API"""
+          labels_list = [label.strip() for label in labels.split(",")]
+          input_data = []
+  
+          if image:
+              model = "jina-clip-v1"
+              for img_path in input_text:
+                  try:
+                      with open(img_path, "rb") as img_file:
+                          img_base64 = base64.b64encode(img_file.read()).decode("utf-8")
+                          input_data.append({"image": img_base64})
+                  except IOError as e:
+                      click.echo(f"Error reading image file {img_path}: {str(e)}", err=True)
+                      return
+          else:
+              model = "jina-embeddings-v3"
+              input_data = list(input_text)
+  
+          try:
+              result = jina_classify(input_data, labels_list, model)
+              click.echo(json.dumps(result, indent=2))
+          except Exception as e:
+              click.echo(f"Error occurred while classifying: {str(e)}", err=True)
+  
+  def read_url(url: str, options: str = "Default") -&gt; Dict[str, Any]:
+      api_url = "https://r.jina.ai/"
+      data = {
+          "url": url,
+          "options": options
+      }
+      headers = {
+          "X-With-Links-Summary": "true",
+          "X-With-Images-Summary": "true"
+      }
+      return jina_request(api_url, data, headers)
+  
+  
+  def fetch_metaprompt() -&gt; str:
+      url = "https://docs.jina.ai"
+      try:
+          with httpx.Client(timeout=3) as client:
+              response = client.get(url)
+              response.raise_for_status()
+              return response.text
+      except (httpx.RequestError, httpx.TimeoutException) as e:
+          click.echo(f"Warning: Failed to fetch metaprompt from {url}: {str(e)}")
+          return None
+  
+  def jina_metaprompt() -&gt; str:
+      metaprompt_content = fetch_metaprompt()
+      
+      if metaprompt_content is None:
+          try:
+              with open("jina-metaprompt.md", "r") as file:
+                  return file.read()
+          except FileNotFoundError:
+              raise click.ClickException("jina-metaprompt.md file not found")
+          except IOError as e:
+              raise click.ClickException(f"Error reading jina-metaprompt.md: {str(e)}")
+      else:
+          try:
+              with open("jina-metaprompt.md", "w") as file:
+                  file.write(metaprompt_content)
+          except IOError as e:
+              click.echo(f"Warning: Failed to update jina-metaprompt.md: {str(e)}")
+          
+          return metaprompt_content
+      
+  def rerank_documents(query: str, documents: List[str], model: str = "jina-reranker-v2-base-multilingual") -&gt; List[Dict[str, Any]]:
+      """
+      Rerank a list of documents based on their relevance to a given query.
+  
+      Args:
+          query (str): The query string to compare documents against.
+          documents (List[str]): A list of document strings to be reranked.
+          model (str, optional): The reranking model to use. Defaults to "jina-reranker-v2-base-multilingual".
+  
+      Returns:
+          List[Dict[str, Any]]: A list of dictionaries containing reranked documents and their scores.
+          Each dictionary includes 'text' (the document), 'index' (original position), and 'score' (relevance score).
+  
+      Raises:
+          click.ClickException: If there's an error in the API call.
+      """
+      url = "https://api.jina.ai/v1/rerank"
+      data = {
+          "model": model,
+          "query": query,
+          "documents": documents
+      }
+      response = jina_request(url, data)
+      return response["results"]
+  
+  def segment_text(content: str, tokenizer: str = "cl100k_base", return_tokens: bool = False, return_chunks: bool = True, max_chunk_length: int = 1000) -&gt; Dict[str, Any]:
+      """
+      Segment text into tokens or chunks using the Jina AI Segmenter API.
+  
+      Args:
+          content (str): The text content to segment.
+          tokenizer (str): The tokenizer to use. Default is "cl100k_base".
+          return_tokens (bool): Whether to return tokens in the response. Default is False.
+          return_chunks (bool): Whether to return chunks in the response. Default is True.
+          max_chunk_length (int): Maximum characters per chunk. Only effective if 'return_chunks' is True. Default is 1000.
+  
+      Returns:
+          Dict[str, Any]: The response from the Jina AI Segmenter API.
+  
+      Raises:
+          click.ClickException: If there's an error in the API call or response.
+      """
+      url = "https://segment.jina.ai/"
+      data = {
+          "content": content,
+          "tokenizer": tokenizer,
+          "return_tokens": return_tokens,
+          "return_chunks": return_chunks,
+          "max_chunk_length": max_chunk_length
+      }
+      return jina_request(url, data)
+  
+  
+  def jina_request(url: str, data: Dict[str, Any], headers: Dict[str, str] = None) -&gt; Dict[str, Any]:
+      if not JINA_API_KEY:
+          raise ValueError("JINA_API_KEY environment variable is not set")
+      
+      default_headers = {
+          "Authorization": f"Bearer {JINA_API_KEY}",
+          "Content-Type": "application/json",
+          "Accept": "application/json"
+      }
+      if headers:
+          default_headers.update(headers)
+      
+      try:
+          with httpx.Client() as client:
+              response = client.post(url, json=data, headers=default_headers)
+              response.raise_for_status()
+              return response.json()
+      except httpx.HTTPError as e:
+          raise click.ClickException(f"Error calling Jina AI API: {str(e)}")
+  
+  def jina_search(query: str, site: str = None, with_links: bool = False, with_images: bool = False) -&gt; Dict[str, Any]:
+      url = "https://s.jina.ai/"
+      headers = {}
+      
+      if site:
+          headers["X-Site"] = site
+      if with_links:
+          headers["X-With-Links-Summary"] = "true"
+      if with_images:
+          headers["X-With-Images-Summary"] = "true"
+  
+      data = {
+          "q": query,
+          "options": "Default"
+      }
+  
+      return jina_request(url, data, headers)
+  
+  def jina_read(url: str, with_links: bool = False, with_images: bool = False) -&gt; Dict[str, Any]:
+      api_url = "https://r.jina.ai/"
+      headers = {}
+      
+      if with_links:
+          headers["X-With-Links-Summary"] = "true"
+      if with_images:
+          headers["X-With-Images-Summary"] = "true"
+  
+      data = {
+          "url": url,
+          "options": "Default"
+      }
+  
+      return jina_request(api_url, data, headers)
+  
+  def jina_ground(statement: str, sites: List[str] = None) -&gt; Dict[str, Any]:
+      url = "https://g.jina.ai/"
+      headers = {}
+      
+      if sites:
+          headers["X-Site"] = ",".join(sites)
+  
+      data = {
+          "statement": statement
+      }
+  
+      return jina_request(url, data, headers)
+  
+  def jina_embed(text: str, model: str = "jina-embeddings-v3") -&gt; Dict[str, Any]:
+      url = "https://api.jina.ai/v1/embeddings"
+      data = {
+          "input": [text],
+          "model": model
+      }
+  
+      return jina_request(url, data)
+  
+  def jina_classify(input_data: List[Union[str, Dict[str, str]]], labels: List[str], model: str) -&gt; Dict[str, Any]:
+      url = "https://api.jina.ai/v1/classify"
+      data = {
+          "model": model,
+          "input": input_data,
+          "labels": labels
+      }
+  
+      try:
+          return jina_request(url, data)
+      except click.ClickException as e:
+          raise click.ClickException(f"Error occurred while classifying: {str(e)}. Please check your input data and try again.")
+</python_file>
+<readme>
+  # llm-jina
+  
+  [![PyPI](https://img.shields.io/pypi/v/llm-jina.svg)](https://pypi.org/project/llm-jina/)
+  [![Changelog](https://img.shields.io/github/v/release/yourusername/llm-jina?include_prereleases&amp;label=changelog)](https://github.com/yourusername/llm-jina/releases)
+  [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](https://github.com/yourusername/llm-jina/blob/main/LICENSE)
+  
+  LLM plugin for interacting with Jina AI APIs
+  
+  ## Table of Contents
+  - [llm-jina](#llm-jina)
+    - [Table of Contents](#table-of-contents)
+    - [Installation](#installation)
+    - [Configuration](#configuration)
+    - [Usage](#usage)
+      - [Embedding](#embedding)
+      - [Reranking](#reranking)
+      - [URL Reading](#url-reading)
+      - [Web Search](#web-search)
+      - [Fact Checking](#fact-checking)
+      - [Text Segmentation](#text-segmentation)
+      - [Classification](#classification)
+      - [Code Generation](#code-generation)
+      - [Metaprompt](#metaprompt)
+    - [Development](#development)
+    - [Contributing](#contributing)
+  
+  ## Installation
+  
+  Install this plugin in the same environment as [LLM](https://llm.datasette.io/).
+  
+  ```bash
+  llm install llm-jina
+  ```
+  
+  ## Configuration
+  
+  You need to set the `JINA_API_KEY` environment variable with your Jina AI API key. You can get a free API key from [https://jina.ai/?sui=apikey](https://jina.ai/?sui=apikey).
+  
+  ```bash
+  export JINA_API_KEY=your_api_key_here
+  ```
+  
+  ## Usage
+  
+  This plugin adds several commands to interact with Jina AI APIs:
+  
+  ### Embedding
+  
+  Generate embeddings for given texts:
+  
+  ```bash
+  llm jina embed "The quick brown fox jumps over the lazy dog."
+  ```
+  
+  You can specify a different model using the `--model` option:
+  
+  ```bash
+  llm jina embed "To be, or not to be, that is the question." --model jina-embeddings-v2-base-en
+  ```
+  
+  ### Reranking
+  
+  Rerank documents based on a query:
+  
+  ```bash
+  llm jina rerank "Best sci-fi movies" "Star Wars: A New Hope" "The Matrix" "Blade Runner" "Interstellar" "2001: A Space Odyssey"
+  ```
+  
+  You can specify a different model using the `--model` option:
+  
+  ```bash
+  llm jina rerank "Healthy eating tips" "Eat more fruits and vegetables" "Limit processed foods" "Stay hydrated" --model jina-reranker-v2-base-en 
+  ```
+  
+  ### URL Reading
+  
+  Read and parse content from a URL:
+  
+  ```bash
+  llm jina read https://en.wikipedia.org/wiki/Artificial_intelligence
+  ```
+  
+  You can include link and image summaries:
+  
+  ```bash
+  llm jina read https://www.nasa.gov/topics/moon-to-mars --with-links --with-images
+  ```
+  
+  ### Web Search
+  
+  Search the web for information:
+  
+  ```bash
+  llm jina search "History of the internet"
+  ```
+  
+  You can limit the search to a specific domain:
+  
+  ```bash
+  llm jina search "Python programming tutorials" --site docs.python.org 
+  ```
+  
+  Example with multiple options:
+  
+  ```bash
+  llm jina search "Climate change impacts" --site nasa.gov --with-links --with-images
+  ```
+  
+  ### Fact Checking
+  
+  Verify the factual accuracy of a statement:
+  
+  ```bash
+  llm jina ground "The Mona Lisa was painted by Leonardo da Vinci."
+  ```
+  
+  You can provide specific sites for grounding:
+  
+  ```bash
+  llm jina ground "Jina AI offers state-of-the-art AI models." --sites https://jina.ai,https://docs.jina.ai
+  ```
+  
+  ### Text Segmentation 
+  
+  Segment text into tokens or chunks:
+  
+  ```bash
+  llm jina segment --content "Space: the final frontier. These are the voyages of the starship Enterprise. Its five-year mission: to explore strange new worlds. To seek out new life and new civilizations. To boldly go where no man has gone before
+  In the beginning God created the heaven and the earth. And the earth was without form, and void; and darkness was upon the face of the deep." --tokenizer cl100k_base --return-chunks
+  ```
+  
+  Example response:
+  ```json
+  {
+    "chunks": [
+      "Space: the final frontier. These are the voyages of the starship Enterprise. Its five-year mission: to explore strange new worlds. To seek out new life and new civilizations. To boldly go where no man has gone before\n",
+      "In the beginning God created the heaven and the earth. And the earth was without form, and void; and darkness was upon the face of the deep."
+    ]
+  }
+  ```
+  
+  ### Classification
+  
+  Classify inputs into given labels:
+  
+  ```bash
+  llm jina classify "The movie was amazing! I loved every minute of it." "The acting was terrible and the plot made no sense." --labels positive negative neutral 
+  ```
+  
+  For image classification:
+  
+  ```bash
+  llm jina classify path/to/cat.jpg path/to/dog.jpg path/to/bird.jpg --labels feline canine avian --image
+  ```
+  
+  ### Code Generation
+  
+  Generate Jina API code based on a prompt:
+  
+  ```bash
+  llm jina generate-code "Create a function that searches Wikipedia for information about famous scientists and reranks the results based on relevance to the query."
+  ```
+  
+  ```bash
+  llm jina generate-code "Create a function that searches for information about AI and reranks the results based on relevance"
+  ```
+  
+  ### Metaprompt
+  
+  Display the Jina metaprompt used for generating code:
+  
+  ```bash
+  llm jina metaprompt
+  ```
+  
+  ## Development
+  
+  To set up this plugin locally, first checkout the code. Then create a new virtual environment:
+  
+  ```bash 
+  cd llm-jina
+  python3 -m venv venv
+  source venv/bin/activate
+  ```
+  
+  Now install the dependencies and test dependencies:
+  
+  ```bash
+  pip install -e '.[test]'
+  ```
+  
+  To run the tests:
+  
+  ```bash
+  pytest
+  ```
+  
+  ## Contributing
+  
+  Contributions to this plugin are welcome! Please refer to the [LLM plugin development documentation](https://llm.datasette.io/en/stable/plugins/index.html) for more information on how to get started.
+</readme>
+</plugin>
+<plugin name="llm-classify">
+<python_file name="llm_classify/__init__.py"
+    import os
+    import pathlib
+    import llm
+    import click
+    import json
+    import math
+    import time
+    from typing import List, Dict, Optional, Tuple
+    import sys
+
+    import sqlite_utils
+
+
+    def user_dir():
+        llm_user_path = os.environ.get("LLM_USER_PATH")
+        if llm_user_path:
+            path = pathlib.Path(llm_user_path)
+        else:
+            path = pathlib.Path(click.get_app_dir("io.datasette.llm"))
+        path.mkdir(exist_ok=True, parents=True)
+        return path
+
+    def logs_db_path():
+        return user_dir() / "logs.db"
+
+    @llm.hookimpl
+    def register_commands(cli):
+        @cli.command()
+        @click.argument("content", type=str, required=False, nargs=-1)
+        @click.option("-c", "--classes", required=True, multiple=True, help="Class options for classification")
+        @click.option("-m", "--model", default="gpt-3.5-turbo", help="LLM model to use")
+        @click.option("-t", "--temperature", type=float, default=0, help="Temperature for API call")
+        @click.option(
+            "-e", "--examples", 
+            multiple=True, 
+            type=str,
+            help="Examples in the format 'content:class'. Can be specified multiple times."
+        )
+        @click.option("-p", "--prompt", help="Custom prompt template")
+        @click.option("--no-content", is_flag=True, help="Exclude content from the output")
+        def classify(content: Tuple[str], classes: Tuple[str], model: str, temperature: float, examples: Tuple[str], prompt: Optional[str], no_content: bool):
+            """Classify content using LLM models"""
+            if len(classes) < 2:
+                raise click.ClickException("At least two classes must be provided")
+            
+            if temperature < 0 or temperature > 1:
+                raise click.ClickException("Temperature must be between 0 and 1")
+
+            # Handle piped input if no content arguments provided
+            if not content and not sys.stdin.isatty():
+                content = [line.strip() for line in sys.stdin.readlines()]
+            elif not content:
+                raise click.ClickException("No content provided. Either pipe content or provide it as an argument.")
+
+            examples_list = None
+            if examples:
+                examples_list = []
+                for example in examples:
+                    try:
+                        example_content, class_ = example.rsplit(':', 1)
+                        examples_list.append({"content": example_content.strip(), "class": class_.strip()})
+                    except ValueError:
+                        click.echo(f"Warning: Skipping invalid example format: {example}", err=True)
+                        continue
+            
+            results = classify_content(
+                list(content), list(classes), model, temperature, examples_list, prompt, no_content
+            )
+            click.echo(json.dumps(results, indent=2))
+
+    def classify_content(
+        content: List[str],
+        classes: List[str],
+        model: str,
+        temperature: float,
+        examples: Optional[List[Dict[str, str]]] = None,
+        custom_prompt: Optional[str] = None,
+        no_content: bool = False
+    ) -> List[Dict[str, Optional[str]]]:
+        results = []
+        for item in content:
+            winner, probability = get_class_probability(
+                item, classes, model, temperature, examples, custom_prompt
+            )
+            result = {"class": winner, "score": probability}
+            if not no_content:
+                result["content"] = item
+            results.append(result)
+        return results
+
+    def get_class_probability(
+        content: str,
+        classes: List[str],
+        model: str,
+        temperature: float,
+        examples: Optional[List[Dict[str, str]]] = None,
+        custom_prompt: Optional[str] = None
+    ) -> Tuple[str, float]:
+        llm_model = llm.get_model(model)
+        
+        if custom_prompt:
+            prompt = custom_prompt
+        else:
+            prompt = f"""You are a highly efficient content classification system. Your task is to classify the given content into a single, most appropriate category from a provided list.
+    <INSTRUCTIONS>
+    1. Read and understand the content thoroughly.
+    2. Consider each category and how well it fits the content.
+    3. Choose the single most appropriate category that best describes the main theme or purpose of the content.
+    4. If multiple categories seem applicable, select the one that is most central or relevant to the overall message.
+
+    Here are the categories you can choose from:
+    <CLASSES>
+    {'\n'.join(classes)}
+    </CLASSES>
+
+    </INSTRUCTIONS>
+    """
+
+        if examples:
+            prompt += "Examples:"
+            for example in examples:
+                prompt += f"""
+        Content: {example['content']}
+        Class: {example['class']}"""
+
+        prompt += f"""</INSTRUCTIONS>
+    Content: {content}
+    Class: """
+        
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                response = llm_model.prompt(prompt, temperature=temperature, logprobs=len(classes))
+                
+                db = sqlite_utils.Database(logs_db_path())
+                response.log_to_db(db)
+                
+                
+                generated_text = response.text().strip().lower()
+                total_logprob = 0.0
+                logprobs = response.response_json.get('logprobs', {})
+                
+                for token_info in logprobs['content']:
+                    total_logprob += token_info.logprob
+
+                probability = math.exp(total_logprob)
+                
+                # Ensure generated text matches one of the classes
+                found_class = None
+                for class_ in classes:
+                    if class_.lower() == generated_text:
+                        found_class = generated_text
+                        break
+                
+                if found_class is None:
+                    return generated_text, 0.0
+
+                return found_class, probability
+
+            except Exception as e:
+                if attempt < max_retries - 1:
+                    click.echo(f"An error occurred: {e}. Retrying...", err=True)
+                    time.sleep(2 ** attempt)
+                else:
+                    click.echo(f"Max retries reached. An error occurred: {e}", err=True)
+                    return "Error", 0
+
+    @llm.hookimpl
+    def register_models(register):
+        pass  # No custom models to register for this plugin
+
+    @llm.hookimpl
+    def register_prompts(register):
+        pass  # No custom prompts to register for this plugin
+</python_file>
+
+<readme>
+    # llm-classifier
+
+    [![PyPI](https://img.shields.io/pypi/v/llm-classifier.svg)](https://pypi.org/project/llm-classifier/)
+    [![Changelog](https://img.shields.io/github/v/release/yourusername/llm-classifier?include_prereleases&label=changelog)](https://github.com/yourusername/llm-classifier/releases)
+    [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](https://github.com/yourusername/llm-classifier/blob/main/LICENSE)
+
+    LLM plugin for content classification using various language models
+
+    ## Installation
+
+
+    Install this plugin in the same environment as [LLM](https://llm.datasette.io/).
+
+    ```bash
+    llm install llm-classifier
+    ```
+
+    ## Usage
+
+    This plugin adds a new `classify` command to the LLM CLI. You can use it to classify content into predefined categories using various language models.
+
+    Basic usage:
+
+    ```bash
+    llm classify "This is a happy message" -c positive -c negative -c neutral -m gpt-3.5-turbo
+    ```
+
+    Options:
+
+    - `content`: The content(s) to classify. You can provide multiple items.
+    - `-c, --classes`: Class options for classification (at least two required).
+    - `-m, --model`: LLM model to use (default: gpt-3.5-turbo).
+    - `-t, --temperature`: Temperature for API call (default: 0).
+    - `-e, --examples`: Examples in the format 'content:class' (can be used multiple times).
+    - `-p, --prompt`: Custom prompt template.
+    - `--no-content`: Exclude content from the output.
+
+    You can also pipe content to classify:
+
+    ```bash
+    echo "This is exciting news!" | llm classify -c positive -c negative -c neutral
+    ```
+
+    ## Examples
+
+    1. Basic classification using a custom model and temperature:
+
+    ```bash
+    llm classify "The weather is nice today" -c good -c bad -c neutral -m gpt-4 -t 0.7
+    ```
+    Output:
+    ```json
+    [
+    {
+        "class": "good",
+        "score": 0.998019085206617,
+        "content": "The weather is nice today"
+    }
+    ]
+    ```
+
+    2. Basic classification multi-processing with default model:
+    ```bash
+    llm classify "I love this product" "This is terrible" -c positive -c negative -c neutral
+    ```
+    Output:
+    ```json
+    [
+    {
+        "class": "positive",
+        "score": 0.9985889762314736,
+        "content": "I love this product"
+    },
+    {
+        "class": "negative",
+        "score": 0.9970504305526415,
+        "content": "This is terrible"
+    }
+    ]
+    ```
+
+
+    3. Providing examples for few-shot learning:
+
+    ```bash
+    llm classify "The stock market crashed" -c economic -c political -c environmental \
+        -e "New trade deal signed:economic" -e "President gives speech:political" \
+        -e "Forest fires in California:environmental"
+    ```
+
+    4. Using a custom prompt:
+
+    ```bash
+    llm classify "Breaking news: Earthquake in Japan" -c urgent -c not-urgent \
+        -p "Classify the following news headline as either urgent or not-urgent:"
+    ```
+
+
+    5. Multiple classification with Examples:
+    ```bash
+    llm classify 'news.ycombinator.com' 'facebook.com' 'ai.meta.com' \
+    -c 'signal' -c 'noise' -c 'neutral' \
+    -e "github.com:signal" -e "arxiv.org:signal" -e "instagram.com:noise" \
+    -e "pinterest.com:noise" -e "anthropic.ai:signal" -e "twitter.com:noise" 
+    --model openrouter/openai/gpt-4-0314
+    ```
+    ```json
+    [
+    {
+        "class": "signal",
+        "score": 0.9994780818067087,
+        "content": "news.ycombinator.com"
+    },
+    {
+        "class": "noise",
+        "score": 0.9999876476902904,
+        "content": "facebook.com"
+    },
+    {
+        "class": "signal",
+        "score": 0.9999895549275502,
+        "content": "ai.meta.com"
+    }
+    ]
+    ```
+
+    6. Terminal commands classification:
+    ```bash
+    llm classify 'df -h' 'chown -R user:user /' -c 'safe' -c 'danger' -c 'neutral' -e "ls:safe" -e "rm:danger" -e "echo:neutral" --model gpt-4o-mini
+    ```
+    ```json
+    [
+    {
+        "class": "neutral",
+        "score": 0.9995317830277939,
+        "content": "df -h"
+    },
+    {
+        "class": "danger",
+        "score": 0.9964036839906633,
+        "content": "chown -R user:user /"
+    }
+    ]
+    ```
+
+    7. Classify a tweet
+    ```shell
+    llm classify $tweet -c 'AI' -c 'ASI' -c 'AGI' --model gpt-4o-mini
+    ```
+    ```json
+    [
+    {
+        "class": "asi",
+        "score": 0.9999984951481323,
+        "content": "Superintelligence is within reach.\\n\\nBuilding safe superintelligence (SSI) is the most important technical problem of our time.\\n\\nWe've started the world\u2019s first straight-shot SSI lab, with one goal and one product: a safe superintelligence."
+    }
+    ]
+    ```
+
+    8. Verify facts
+    ```shell
+    llm classify "<source>$(curl -s docs.jina.ai)</source><statement>Jina ai has an image generation api" -c True -c False --model gpt-4o --no-content
+    ```
+    ```json
+    [
+        {
+            "class": "false",
+            "score": 0.99997334352929
+        }
+    ]
+    ```
+
+    ## Advanced Examples
+
+    9. **Acting on the classification result in a shell script:**
+    ```bash
+    class-tweet() {
+        local tweet="$1"
+        local threshold=0.6
+        local class="machine-learning"
+
+        result=$(llm classify "$tweet" -c 'PROGRAMMING' -c 'MACHINE-LEARNING' \
+        --model openrouter/openai/gpt-4o-mini \
+        | jq -r --arg class "$class" --argjson threshold "$threshold" \
+        '.[0] | select(.class == $class and .score > $threshold) | .class')
+
+        if [ -n "$result" ]; then
+            echo "Tweet classified as $class with high confidence. Executing demo..."
+            echo "Demo: This is a highly relevant tweet about $class"
+        else
+            echo "Tweet does not meet classification criteria."
+        fi
+    }
+    ```
+    ```
+    Tweet classified as machine-learning with high confidence. Executing demo...
+    Demo: This is a highly relevant tweet about machine-learning
+    ```
+
+    10. **Piping multiple lines using heredoc:**
+        ```bash
+        cat <<EOF | llm classify -c 'tech' -c 'sports' -c 'politics'
+        AI makes rapid progress
+        Football season starts soon
+        New tax policy announced
+        EOF
+        ```
+        ```json
+    [
+        {
+            "class": "tech",
+            "score": 0.9998246033937837,
+            "content": "AI makes rapid progress"
+        },
+        {
+            "class": "sports",
+            "score": 0.999863096482142,
+            "content": "Football season starts soon"
+        },
+        {
+            "class": "politics",
+            "score": 0.999994561441089,
+            "content": "New tax policy announced"
+        }
+    ]
+    ```
+
+    11. **Parsing classification output with `jq`:**
+        ```bash
+        echo "OpenAI releases GPT-4" | llm classify -c 'tech' -c 'business' | jq '.[0].class'
+        ```
+
+    12. **Simplifying output for shell scripts:**
+        ```bash
+        echo "Breaking news: earthquake hits city" | llm classify -c 'world' -c 'local' -c 'sports' | jq -r '.[0].class'
+        ```
+        ```
+        world
+        ```
+        ```bash
+        if [[ $(echo "Breaking news: earthquake hits city" | llm classify -c 'world' -c 'local' -c 'sports' | jq -r '.[0].class') == "world" ]]; then
+            echo "This is world news"
+        fi
+        ```
+
+    ## Using Classifai as a Python Module
+
+    Classifai can also be used as a Python module for more advanced use cases. Here is an example of how to use it in your Python code:
+
+    ## Development
+
+    To set up this plugin locally, first checkout the code. Then create a new virtual environment:
+
+    ```bash
+    cd llm-classifier
+    python -m venv venv
+    source venv/bin/activate
+    ```
+
+    Now install the dependencies and test dependencies:
+
+    ```bash
+    llm install -e '.[test]'
+    ```
+
+    To run the tests:
+
+    ```bash
+    pytest
+    ```
+
+    ## Contributing
+
+    Contributions to llm-classifier are welcome! Please refer to the [GitHub repository](https://github.com/yourusername/llm-classifier) for more information on how to contribute.
+
+    ## License
+
+    This project is licensed under the Apache License 2.0. See the [LICENSE](LICENSE) file for details.
+</readme>
+</plugin>
+<plugin name="llm-consortium">
+<python_file name="llm_consortium/__init__.py">
+    import click
+    import json
+    import llm
+    import asyncio
+    from typing import Dict, List, Optional, Any
+    from datetime import datetime
+    import logging
+    import sys
+    import re
+    import os
+    import pathlib
+    import sqlite_utils
+
+    # Read system prompt from file
+    def _read_system_prompt() -> str:
+        try:
+            file_path = pathlib.Path(__file__).parent / "system_prompt.txt"
+            with open(file_path, "r") as f:
+                return f.read().strip()
+        except Exception as e:
+            logger.error(f"Error reading system prompt file: {e}")
+            return ""
+
+    def _read_arbiter_prompt() -> str:
+        try:
+            file_path = pathlib.Path(__file__).parent / "arbiter_prompt.xml"
+            with open(file_path, "r") as f:
+                return f.read().strip()
+        except Exception as e:
+            logger.error(f"Error reading arbiter prompt file: {e}")
+            return ""
+
+    def _read_iteration_prompt() -> str:
+        try:
+            file_path = pathlib.Path(__file__).parent / "iteration_prompt.txt"
+            with open(file_path, "r") as f:
+                return f.read().strip()
+        except Exception as e:
+            logger.error(f"Error reading iteration prompt file: {e}")
+            return ""
+
+    # Todo: Add a parser-model llm - if confidence score, or anything else is not found in the response by normal parsing - try to parse it with the parser model. If that fails, try to prompt the original model again n times.
+    # Todo: <iteration_history> is empty.
+    DEFAULT_SYSTEM_PROMPT = _read_system_prompt()
+
+    def user_dir() -> pathlib.Path:
+        """Get or create user directory for storing application data."""
+        llm_user_path = os.environ.get("LLM_USER_PATH")
+        if llm_user_path:
+            path = pathlib.Path(llm_user_path)
+        else:
+            path = pathlib.Path(click.get_app_dir("io.datasette.llm"))
+        path.mkdir(exist_ok=True, parents=True)
+        return path
+
+    def logs_db_path() -> pathlib.Path:
+        """Get path to logs database."""
+        return user_dir() / "logs.db"
+
+
+    def setup_logging() -> None:
+        """Configure logging to write to both file and console."""
+        log_path = user_dir() / "consortium.log"
+        
+        # Create a formatter
+        formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+        
+        # Console handler with ERROR level
+        console_handler = logging.StreamHandler(sys.stderr)
+        console_handler.setLevel(logging.ERROR)
+        console_handler.setFormatter(formatter)
+        
+        file_handler = logging.FileHandler(str(log_path))
+        file_handler.setLevel(logging.ERROR)
+        file_handler.setFormatter(formatter)
+        
+        # Configure root logger
+        root_logger = logging.getLogger()
+        root_logger.setLevel(logging.ERROR)
+        root_logger.addHandler(console_handler)
+        root_logger.addHandler(file_handler)
+
+    # Replace existing logging setup with new setup
+    setup_logging()
+    logger = logging.getLogger(__name__)
+    logger.debug("llm_karpathy_consortium module is being imported")
+
+    class DatabaseConnection:
+        _instance: Optional['DatabaseConnection'] = None
+        
+        def __init__(self):
+            self.db = sqlite_utils.Database(logs_db_path())
+        
+        @classmethod
+        def get_connection(cls) -> sqlite_utils.Database:
+            """Get singleton database connection."""
+            if cls._instance is None:
+                cls._instance = cls()
+            return cls._instance.db
+
+    def log_response(response, model):
+        """Log model response to database and log file."""
+        try:
+            db = DatabaseConnection.get_connection()
+            response.log_to_db(db)
+            logger.debug(f"Response from {model} logged to database")
+        except Exception as e:
+            logger.error(f"Error logging to database: {e}")
+
+    class IterationContext:
+        def __init__(self, synthesis: Dict[str, Any], model_responses: List[Dict[str, Any]]):
+            self.synthesis = synthesis
+            self.model_responses = model_responses
+
+    class ConsortiumOrchestrator:
+        def __init__(
+            self,
+            models: List[str],
+            system_prompt: Optional[str] = None,
+            confidence_threshold: float = 0.8,
+            max_iterations: int = 3,
+            arbiter: Optional[str] = None,
+        ):
+            self.models = models
+            self.system_prompt = system_prompt or DEFAULT_SYSTEM_PROMPT
+            self.confidence_threshold = confidence_threshold
+            self.max_iterations = max_iterations
+            self.arbiter = arbiter or "claude-3-opus-20240229"
+            self.iteration_history: List[IterationContext] = []
+
+        async def orchestrate(self, prompt: str) -> Dict[str, Any]:
+            iteration_count = 0
+            final_result = None
+            original_prompt = prompt
+            current_prompt = f"""<prompt>
+        <instruction>{prompt}</instruction>
+    </prompt>"""
+
+            while iteration_count < self.max_iterations:
+                iteration_count += 1
+                logger.debug(f"Starting iteration {iteration_count}")
+
+                # Get responses from all models using the current prompt
+                model_responses = await self._get_model_responses(current_prompt)
+
+                # Have arbiter synthesize and evaluate responses
+                synthesis = await self._synthesize_responses(original_prompt, model_responses)
+
+                # Store iteration context
+                self.iteration_history.append(IterationContext(synthesis, model_responses))
+
+                if synthesis["confidence"] >= self.confidence_threshold:
+                    final_result = synthesis
+                    break
+
+                # Prepare for next iteration if needed
+                current_prompt = self._construct_iteration_prompt(original_prompt, synthesis)
+
+            if final_result is None:
+                final_result = synthesis
+
+            return {
+                "original_prompt": original_prompt,
+                "model_responses": model_responses,
+                "synthesis": final_result,
+                "metadata": {
+                    "models_used": self.models,
+                    "arbiter": self.arbiter,
+                    "timestamp": datetime.utcnow().isoformat(),
+                    "iteration_count": iteration_count
+                }
+            }
+
+        async def _get_model_responses(self, prompt: str) -> List[Dict[str, Any]]:
+            tasks = [self._get_model_response(model, prompt) for model in self.models]
+            return await asyncio.gather(*tasks)
+
+        async def _get_model_response(self, model: str, prompt: str) -> Dict[str, Any]:
+            logger.debug(f"Getting response from model: {model}")
+            try:
+                xml_prompt = f"""<prompt>
+        <instruction>{prompt}</instruction>
+    </prompt>"""
+                response = llm.get_model(model).prompt(xml_prompt, system=self.system_prompt)
+                log_response(response, model)
+                return {
+                    "model": model,
+                    "response": response.text(),
+                    "confidence": self._extract_confidence(response.text()),
+                }
+            except Exception as e:
+                logger.exception(f"Error getting response from {model}")
+                return {"model": model, "error": str(e)}
+
+        def _parse_confidence_value(self, text: str, default: float = 0.5) -> float:
+            """Helper method to parse confidence values consistently."""
+            # Try to find XML confidence tag, now handling multi-line and whitespace better
+            xml_match = re.search(r"<confidence>\s*(0?\.\d+|1\.0|\d+)\s*</confidence>", text, re.IGNORECASE | re.DOTALL)
+            if xml_match:
+                try:
+                    value = float(xml_match.group(1).strip())
+                    return value / 100 if value > 1 else value
+                except ValueError:
+                    pass
+            
+            # Fallback to plain text parsing
+            for line in text.lower().split("\n"):
+                if "confidence:" in line or "confidence level:" in line:
+                    try:
+                        nums = re.findall(r"(\d*\.?\d+)%?", line)
+                        if nums:
+                            num = float(nums[0])
+                            return num / 100 if num > 1 else num
+                    except (IndexError, ValueError):
+                        pass
+            
+            return default
+
+        def _extract_confidence(self, text: str) -> float:
+            return self._parse_confidence_value(text)
+
+        def _construct_iteration_prompt(self, original_prompt: str, last_synthesis: Dict[str, Any]) -> str:
+            """Construct the prompt for the next iteration."""
+            iteration_prompt_template = _read_iteration_prompt()
+            iteration_history = self._format_iteration_history()
+            
+            # Create the formatted prompt directly
+            return f"""Refining response for original prompt:
+    {original_prompt}
+
+    Previous synthesis results:
+    {json.dumps(last_synthesis, indent=2)}
+
+    Previous iteration history:
+    {iteration_history}
+
+    Please provide an improved response that addresses any issues identified in the previous iterations."""
+
+        def _format_iteration_history(self) -> str:
+            history = []
+            for i, iteration in enumerate(self.iteration_history, start=1):
+                model_responses = "\n".join(
+                    f"<model_response>{r['model']}: {r.get('response', 'Error')}</model_response>"
+                    for r in iteration.model_responses
+                )
+                
+                history.append(f"""<iteration>
+                <iteration_number>{i}</iteration_number>
+                <model_responses>
+                    {model_responses}
+                </model_responses>
+                <synthesis>{iteration.synthesis['synthesis']}</synthesis>
+                <confidence>{iteration.synthesis['confidence']}</confidence>
+                <refinement_areas>
+                    {self._format_refinement_areas(iteration.synthesis['refinement_areas'])}
+                </refinement_areas>
+            </iteration>""")
+            return "\n".join(history) if history else "<no_previous_iterations>No previous iterations available.</no_previous_iterations>"
+
+        def _format_refinement_areas(self, areas: List[str]) -> str:
+            return "\n                ".join(f"<area>{area}</area>" for area in areas)
+
+        def _format_responses(self, responses: List[Dict[str, Any]]) -> str:
+            formatted = []
+            for r in responses:
+                formatted.append(f"""<model_response>
+                <model>{r['model']}</model>
+                <confidence>{r.get('confidence', 'N/A')}</confidence>
+                <response>{r.get('response', 'Error: ' + r.get('error', 'Unknown error'))}</response>
+            </model_response>""")
+            return "\n".join(formatted)
+
+        async def _synthesize_responses(self, original_prompt: str, responses: List[Dict[str, Any]]) -> Dict[str, Any]:
+            logger.debug("Synthesizing responses")
+            arbiter = llm.get_model(self.arbiter)
+            
+            formatted_history = self._format_iteration_history()
+            formatted_responses = self._format_responses(responses)
+            
+            # Load and format the arbiter prompt template
+            arbiter_prompt_template = _read_arbiter_prompt()
+            arbiter_prompt = arbiter_prompt_template.format(
+                original_prompt=original_prompt,
+                formatted_responses=formatted_responses,
+                formatted_history=formatted_history
+            )
+
+            arbiter_response = arbiter.prompt(arbiter_prompt)
+            log_response(arbiter_response, arbiter)
+            
+            # Print raw arbiter response
+            click.echo("\nArbiter Response:\n")
+            click.echo(arbiter_response.text())
+            click.echo("\n---\n")
+
+            try:
+                return self._parse_arbiter_response(arbiter_response.text())
+            except Exception as e:
+                logger.error(f"Error parsing arbiter response: {e}")
+                return {
+                    "synthesis": arbiter_response.text(),
+                    "confidence": 0.5,
+                    "analysis": "Parsing failed - see raw response",
+                    "dissent": "",
+                    "needs_iteration": False,
+                    "refinement_areas": []
+                }
+
+        def _parse_arbiter_response(self, text: str) -> Dict[str, Any]:
+            sections = {
+                "synthesis": r"<synthesis>([\s\S]*?)</synthesis>",
+                "confidence": r"<confidence>\s*([\d.]+)\s*</confidence>",
+                "analysis": r"<analysis>([\s\S]*?)</analysis>",
+                "dissent": r"<dissent>([\s\S]*?)</dissent>",
+                "needs_iteration": r"<needs_iteration>(true|false)</needs_iteration>",
+                "refinement_areas": r"<refinement_areas>([\s\S]*?)</refinement_areas>"
+            }
+
+            result = {}
+            for key, pattern in sections.items():
+                match = re.search(pattern, text, re.IGNORECASE | re.DOTALL)
+                if match:
+                    if key == "confidence":
+                        try:
+                            value = float(match.group(1).strip())
+                            result[key] = value / 100 if value > 1 else value
+                        except (ValueError, TypeError):
+                            result[key] = 0.5
+                    elif key == "needs_iteration":
+                        result[key] = match.group(1).lower() == "true"
+                    elif key == "refinement_areas":
+                        result[key] = [area.strip() for area in match.group(1).split("\n") if area.strip()]
+                    else:
+                        result[key] = match.group(1).strip()
+                else:
+                    result[key] = "" if key != "confidence" else 0.5
+
+            return result
+
+    # Add this helper function before the register_commands
+    def read_stdin_if_not_tty() -> Optional[str]:
+        """Read from stdin if it's not a terminal."""
+        if not sys.stdin.isatty():
+            return sys.stdin.read().strip()
+        return None
+
+    @llm.hookimpl
+    def register_commands(cli):
+        @cli.command()
+        @click.argument("prompt")
+        @click.option(
+            "-m",
+            "--models",
+            multiple=True,
+            help="Models to include in consortium (can specify multiple)",
+            default=[
+                "claude-3-opus-20240229",
+                "claude-3-sonnet-20240229",
+                "gpt-4",
+                "gemini-pro"
+            ],
+        )
+        @click.option(
+            "--arbiter",
+            help="Model to use as arbiter",
+            default="claude-3-opus-20240229"
+        )
+        @click.option(
+            "--confidence-threshold",
+            type=float,
+            help="Minimum confidence threshold",
+            default=0.8
+        )
+        @click.option(
+            "--max-iterations",
+            type=int,
+            help="Maximum number of iteration rounds",
+            default=3
+        )
+        @click.option(
+            "--system",
+            help="System prompt to use",
+        )
+        @click.option(
+            "--output",
+            type=click.Path(dir_okay=False, writable=True),
+            help="Save full results to this JSON file",
+        )
+        @click.option(
+            "--stdin/--no-stdin",
+            default=True,
+            help="Read additional input from stdin and append to prompt",
+        )
+        def consortium(
+            prompt: str,
+            models: List[str],
+            arbiter: str,
+            confidence_threshold: float,
+            max_iterations: int,
+            system: Optional[str],
+            output: Optional[str],
+            stdin: bool,
+        ):
+            """Run prompt through a consortium of models and synthesize results.
+            
+            Reads additional input from stdin if provided and --stdin flag is enabled.
+            The stdin content will be appended to the prompt argument.
+            """
+            if confidence_threshold > 1.0:
+                confidence_threshold /= 100.0
+
+            if stdin:
+                stdin_content = read_stdin_if_not_tty()
+                if stdin_content:
+                    prompt = f"{prompt}\n\n{stdin_content}"
+            
+            logger.info(f"Starting consortium with {len(models)} models")
+            logger.debug(f"Models: {', '.join(models)}")
+            logger.debug(f"Arbiter model: {arbiter}")
+            
+            orchestrator = ConsortiumOrchestrator(
+                models=list(models),
+                system_prompt=system,
+                confidence_threshold=confidence_threshold,
+                max_iterations=max_iterations,
+                arbiter=arbiter,
+            )
+            
+            try:
+                result = asyncio.run(orchestrator.orchestrate(prompt))
+                
+                if output:
+                    with open(output, 'w') as f:
+                        json.dump(result, f, indent=2)
+                    logger.info(f"Results saved to {output}")
+                
+                click.echo("\nSynthesized response:\n")
+                click.echo(result["synthesis"]["synthesis"])
+                
+                click.echo(f"\nConfidence: {result['synthesis']['confidence']}")
+                
+                click.echo("\nAnalysis:")
+                click.echo(result["synthesis"]["analysis"])
+                
+                if result["synthesis"]["dissent"]:
+                    click.echo("\nNotable dissenting views:")
+                    click.echo(result["synthesis"]["dissent"])
+                
+                click.echo(f"\nNumber of iterations: {result['metadata']['iteration_count']}")
+                
+            except Exception as e:
+                logger.exception("Error in consortium command")
+                raise click.ClickException(str(e))
+
+    class KarpathyConsortiumPlugin:
+        @staticmethod
+        @llm.hookimpl
+        def register_commands(cli):
+            logger.debug("KarpathyConsortiumPlugin.register_commands called")
+
+    logger.debug("llm_karpathy_consortium module finished loading")
+
+
+    __all__ = ['KarpathyConsortiumPlugin', 'log_response', 'DatabaseConnection', 'logs_db_path', 'user_dir']
+
+    __version__ = "0.1.0"
+</python_file>
+<readme>
+    # LLM Consortium
+
+    ## Inspiration
+
+    Based on Karpathy's observation:
+
+    "I find that recently I end up using all of the models and all the time. One aspect is the curiosity of who gets what, but the other is that for a lot of problems they have this "NP Complete" nature to them, where coming up with a solution is significantly harder than verifying a candidate solution. So your best performance will come from just asking all the models, and then getting them to come to a consensus."
+
+    A plugin for the `llm` package that implements a model consortium system with iterative refinement and response synthesis. This plugin orchestrates multiple learned language models to collaboratively solve complex problems through structured dialogue, evaluation and arbitration.
+
+    ## Core Algorithm Flow
+
+    The following Mermaid diagram illustrates the core algorithm flow of the LLM Karpathy Consortium:
+
+    ```mermaid
+    flowchart TD
+        A[Start] --> B[Get Model Responses]
+        B --> C[Synthesize Responses]
+        C --> D{Check Confidence}
+        D -- Confidence >= Threshold --> E[Return Final Result]
+        D -- Confidence < Threshold --> F{Max Iterations Reached?}
+        F -- No --> G[Prepare Next Iteration]
+        G --> B
+        F -- Yes --> E
+    ```
+
+    ## Features
+
+    - **Multi-Model Orchestration**: Coordinate responses from multiple LLMs simultaneously
+    - **Iterative Refinement**: Automatically refine responses through multiple rounds until confidence threshold is met
+    - **Advanced Arbitration**: Uses a designated arbiter model to synthesize and evaluate responses
+    - **Database Logging**: Built-in SQLite logging of all interactions and responses
+    - **Configurable Parameters**: Adjustable confidence thresholds, iteration limits, and model selection
+    - **Hundreds of Models**: Supports all models available via llm plugins
+
+    ## Installation
+    First, get https://github.com/simonw/llm
+
+    uv:
+    ```bash
+    uv tool install llm
+    ```
+    pipx:
+    ```bash
+    pipx install llm
+    ```
+
+    ```bash
+    llm install llm-consortium
+    ```
+
+    ## Command Line Usage
+
+    Basic usage:
+    ```bash
+    llm consortium "What are the key considerations for AGI safety?"
+    ```
+
+    ## This will
+
+    1. Send the prompt to multiple models in parallel.
+    2. Gather responses including reasoning and confidence.
+    3. Use an arbiter model to synthesize the responses and identify key points of agreement/disagreement
+    4. The arbiter model evaluates confidence
+    5. If confidence is below threshold and max iterations not reached:
+    - Refinement areas are identified
+    - A new iteration begins with an enhanced prompt
+    6. Process continues until confidence threshold is met or max iterations reached
+    
+    ### Options
+
+    - `-m, --models`: Models to include in consortium (can specify multiple)
+    - `--arbiter-model`: Model to use as arbiter (default: claude-3-opus-20240229)
+    - `--confidence-threshold`: Minimum confidence threshold (default: 0.8)
+    - `--max-iterations`: Maximum number of iteration rounds (default: 3)
+    - `--system`: Custom system prompt
+    - `--output`: Save full results to a JSON file
+
+
+    Advanced usage with options:
+    ```bash
+    llm consortium "Your complex query" \
+    --models claude-3-opus-20240229 \
+    --models claude-3-sonnet-20240229 \
+    --models gpt-4 \
+    --models gemini-pro \
+    --arbiter-model claude-3-opus-20240229 \
+    --confidence-threshold 0.8 \
+    --max-iterations 3 \
+    --output results.json
+    ```
+
+    ### Response Structure
+
+    The plugin uses a structured XML format for responses:
+
+    ```xml
+    <thought_process>
+    [Detailed reasoning about the problem]
+    </thought_process>
+
+    <answer>
+    [Final answer to the query]
+    </answer>
+
+    <confidence>
+    [Confidence level from 0 to 1]
+    </confidence>
+    ```
+
+    ### Database Logging
+
+    All interactions are automatically logged to a SQLite database located in the LLM user directory.
+
+    ## Programmatic Usage
+
+    ```python
+    from llm_consortium import ConsortiumOrchestrator
+
+    orchestrator = ConsortiumOrchestrator(
+        models=["claude-3-opus-20240229", "gpt-4", "gemini-pro"],
+        confidence_threshold=0.8,
+        max_iterations=3,
+        arbiter_model="claude-3-opus-20240229"
+    )
+
+    result = await orchestrator.orchestrate("Your prompt")
+
+    print(f"Synthesized Response: {result['synthesis']['synthesis']}")
+    print(f"Confidence: {result['synthesis']['confidence']}")
+    print(f"Analysis: {result['synthesis']['analysis']}")
+    ```
+
+    ## License
+
+    MIT License
+
+    ## Credits
+
+    Developed as part of the LLM ecosystem, inspired by Andrej Karpathy's work on model collaboration and iteration.
+</readme>
 </plugin>
 </few_shot_prompt>

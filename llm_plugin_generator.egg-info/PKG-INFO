@@ -1,6 +1,6 @@
 Metadata-Version: 2.1
 Name: llm-plugin-generator
-Version: 0.5
+Version: 0.6
 Summary: LLM plugin to generate few-shot prompts for plugin creation
 Author: llm-plugin-generator
 License: Apache-2.0
@@ -77,7 +77,7 @@ llm generate-plugin "Write an llm-cerebras plugin from these docs: $(curl -s htt
 This will generate a new LLM plugin based on the provided description and/or input files. The files will be saved in the specified output directory.
 
 ## Features
-
+# New: Requests are now logged to the llm db.
 - Generates fully functional LLM plugins based on descriptions or input files
 - Supports different plugin types: default, model, and utility
 - Uses few-shot learning with predefined examples for better generation

@@ -1,308 +1,367 @@
 <?xml version='1.0' encoding='utf-8'?>
 <few_shot_prompt>
 <plugin name="llm-claude-3">
-<readme>
-  # llm-claude-3
-  
-  [![PyPI](https://img.shields.io/pypi/v/llm-claude-3.svg)](https://pypi.org/project/llm-claude-3/)
-  [![Changelog](https://img.shields.io/github/v/release/simonw/llm-claude-3?include_prereleases&amp;label=changelog)](https://github.com/simonw/llm-claude-3/releases)
-  [![Tests](https://github.com/simonw/llm-claude-3/actions/workflows/test.yml/badge.svg)](https://github.com/simonw/llm-claude-3/actions/workflows/test.yml)
-  [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](https://github.com/simonw/llm-claude-3/blob/main/LICENSE)
-  
-  LLM access to Claude 3 by Anthropic
-  
-  ## Installation
-  
-  Install this plugin in the same environment as [LLM](https://llm.datasette.io/).
-  ```bash
-  llm install llm-claude-3
-  ```
-  ## Usage
-  
-  First, set [an API key](https://console.anthropic.com/settings/keys) for Claude 3:
-  ```bash
-  llm keys set claude
-  # Paste key here
-  ```
-  
-  Run `llm models` to list the models, and `llm models --options` to include a list of their options.
-  
-  Run prompts like this:
-  ```bash
-  llm -m claude-3.5-sonnet 'Fun facts about pelicans'
-  llm -m claude-3-opus 'Fun facts about squirrels'
-  llm -m claude-3-sonnet 'Fun facts about walruses'
-  llm -m claude-3-haiku 'Fun facts about armadillos'
-  ```
-  
-  ## Development
-  
-  To set up this plugin locally, first checkout the code. Then create a new virtual environment:
-  ```bash
-  cd llm-claude-3
-  python3 -m venv venv
-  source venv/bin/activate
-  ```
-  Now install the dependencies and test dependencies:
-  ```bash
-  llm install -e '.[test]'
-  ```
-  To run the tests:
-  ```bash
-  pytest
-  ```
-  
-</readme>
 <python_file name="llm_claude_3.py">
-  from anthropic import Anthropic
-  import llm
-  from pydantic import Field, field_validator, model_validator
-  from typing import Optional, List
-  
-  
-  @llm.hookimpl
-  def register_models(register):
-      # https://docs.anthropic.com/claude/docs/models-overview
-      register(ClaudeMessages("claude-3-opus-20240229"))
-      register(ClaudeMessages("claude-3-opus-latest"), aliases=("claude-3-opus",))
-      register(ClaudeMessages("claude-3-sonnet-20240229"), aliases=("claude-3-sonnet",))
-      register(ClaudeMessages("claude-3-haiku-20240307"), aliases=("claude-3-haiku",))
-      # 3.5 models
-      register(ClaudeMessagesLong("claude-3-5-sonnet-20240620"))
-      register(ClaudeMessagesLong("claude-3-5-sonnet-20241022"))
-      register(
-          ClaudeMessagesLong("claude-3-5-sonnet-latest"), aliases=("claude-3.5-sonnet", "claude-3.5-sonnet-latest")
-      )
-      # register(
-      #     ClaudeMessagesLong("claude-3-5-haiku-latest"), aliases=("claude-3.5-haiku",)
-      # )
-  
-  
-  class ClaudeOptions(llm.Options):
-      max_tokens: Optional[int] = Field(
-          description="The maximum number of tokens to generate before stopping",
-          default=4_096,
-      )
-  
-      temperature: Optional[float] = Field(
-          description="Amount of randomness injected into the response. Defaults to 1.0. Ranges from 0.0 to 1.0. Use temperature closer to 0.0 for analytical / multiple choice, and closer to 1.0 for creative and generative tasks. Note that even with temperature of 0.0, the results will not be fully deterministic.",
-          default=1.0,
-      )
-  
-      top_p: Optional[float] = Field(
-          description="Use nucleus sampling. In nucleus sampling, we compute the cumulative distribution over all the options for each subsequent token in decreasing probability order and cut it off once it reaches a particular probability specified by top_p. You should either alter temperature or top_p, but not both. Recommended for advanced use cases only. You usually only need to use temperature.",
-          default=None,
-      )
-  
-      top_k: Optional[int] = Field(
-          description="Only sample from the top K options for each subsequent token. Used to remove 'long tail' low probability responses. Recommended for advanced use cases only. You usually only need to use temperature.",
-          default=None,
-      )
-  
-      user_id: Optional[str] = Field(
-          description="An external identifier for the user who is associated with the request",
-          default=None,
-      )
-  
-      @field_validator("max_tokens")
-      @classmethod
-      def validate_max_tokens(cls, max_tokens):
-          real_max = cls.model_fields["max_tokens"].default
-          if not (0 &lt; max_tokens &lt;= real_max):
-              raise ValueError("max_tokens must be in range 1-{}".format(real_max))
-          return max_tokens
-  
-      @field_validator("temperature")
-      @classmethod
-      def validate_temperature(cls, temperature):
-          if not (0.0 &lt;= temperature &lt;= 1.0):
-              raise ValueError("temperature must be in range 0.0-1.0")
-          return temperature
-  
-      @field_validator("top_p")
-      @classmethod
-      def validate_top_p(cls, top_p):
-          if top_p is not None and not (0.0 &lt;= top_p &lt;= 1.0):
-              raise ValueError("top_p must be in range 0.0-1.0")
-          return top_p
-  
-      @field_validator("top_k")
-      @classmethod
-      def validate_top_k(cls, top_k):
-          if top_k is not None and top_k &lt;= 0:
-              raise ValueError("top_k must be a positive integer")
-          return top_k
-  
-      @model_validator(mode="after")
-      def validate_temperature_top_p(self):
-          if self.temperature != 1.0 and self.top_p is not None:
-              raise ValueError("Only one of temperature and top_p can be set")
-          return self
-  
-  
-  class ClaudeMessages(llm.Model):
-      needs_key = "claude"
-      key_env_var = "ANTHROPIC_API_KEY"
-      can_stream = True
-  
-      class Options(ClaudeOptions): ...
-  
-      def __init__(self, model_id, claude_model_id=None, extra_headers=None):
-          self.model_id = model_id
-          self.claude_model_id = claude_model_id or model_id
-          self.extra_headers = extra_headers
-  
-      def build_messages(self, prompt, conversation) -&gt; List[dict]:
-          messages = []
-          if conversation:
-              for response in conversation.responses:
-                  messages.extend(
-                      [
-                          {
-                              "role": "user",
-                              "content": response.prompt.prompt,
-                          },
-                          {"role": "assistant", "content": response.text()},
-                      ]
-                  )
-          messages.append({"role": "user", "content": prompt.prompt})
-          return messages
-  
-      def execute(self, prompt, stream, response, conversation):
-          client = Anthropic(api_key=self.get_key())
-  
-          kwargs = {
-              "model": self.claude_model_id,
-              "messages": self.build_messages(prompt, conversation),
-              "max_tokens": prompt.options.max_tokens,
-          }
-          if prompt.options.user_id:
-              kwargs["metadata"] = {"user_id": prompt.options.user_id}
-  
-          if prompt.options.top_p:
-              kwargs["top_p"] = prompt.options.top_p
-          else:
-              kwargs["temperature"] = prompt.options.temperature
-  
-          if prompt.options.top_k:
-              kwargs["top_k"] = prompt.options.top_k
-  
-          if prompt.system:
-              kwargs["system"] = prompt.system
-  
-          if self.extra_headers:
-              kwargs["extra_headers"] = self.extra_headers
-  
-          if stream:
-              with client.messages.stream(**kwargs) as stream:
-                  for text in stream.text_stream:
-                      yield text
-                  # This records usage and other data:
-                  response.response_json = stream.get_final_message().model_dump()
-          else:
-              completion = client.messages.create(**kwargs)
-              yield completion.content[0].text
-              response.response_json = completion.model_dump()
-  
-      def __str__(self):
-          return "Anthropic Messages: {}".format(self.model_id)
-  
-  
-  class ClaudeMessagesLong(ClaudeMessages):
-      class Options(ClaudeOptions):
-          max_tokens: Optional[int] = Field(
-              description="The maximum number of tokens to generate before stopping",
-              default=4_096 * 2,
-          )
-  
+    from anthropic import Anthropic, AsyncAnthropic
+    import llm
+    from pydantic import Field, field_validator, model_validator
+    from typing import Optional, List
+
+
+    @llm.hookimpl
+    def register_models(register):
+        # https://docs.anthropic.com/claude/docs/models-overview
+        register(
+            ClaudeMessages("claude-3-opus-20240229"),
+            AsyncClaudeMessages("claude-3-opus-20240229"),
+        ),
+        register(
+            ClaudeMessages("claude-3-opus-latest"),
+            AsyncClaudeMessages("claude-3-opus-latest"),
+            aliases=("claude-3-opus",),
+        )
+        register(
+            ClaudeMessages("claude-3-sonnet-20240229"),
+            AsyncClaudeMessages("claude-3-sonnet-20240229"),
+            aliases=("claude-3-sonnet",),
+        )
+        register(
+            ClaudeMessages("claude-3-haiku-20240307"),
+            AsyncClaudeMessages("claude-3-haiku-20240307"),
+            aliases=("claude-3-haiku",),
+        )
+        # 3.5 models
+        register(
+            ClaudeMessagesLong("claude-3-5-sonnet-20240620", supports_pdf=True),
+            AsyncClaudeMessagesLong("claude-3-5-sonnet-20240620", supports_pdf=True),
+        )
+        register(
+            ClaudeMessagesLong("claude-3-5-sonnet-20241022", supports_pdf=True),
+            AsyncClaudeMessagesLong("claude-3-5-sonnet-20241022", supports_pdf=True),
+        )
+        register(
+            ClaudeMessagesLong("claude-3-5-sonnet-latest", supports_pdf=True),
+            AsyncClaudeMessagesLong("claude-3-5-sonnet-latest", supports_pdf=True),
+            aliases=("claude-3.5-sonnet", "claude-3.5-sonnet-latest"),
+        )
+        register(
+            ClaudeMessagesLong("claude-3-5-haiku-latest", supports_images=False),
+            AsyncClaudeMessagesLong("claude-3-5-haiku-latest", supports_images=False),
+            aliases=("claude-3.5-haiku",),
+        )
+
+
+    class ClaudeOptions(llm.Options):
+        max_tokens: Optional[int] = Field(
+            description="The maximum number of tokens to generate before stopping",
+            default=4_096,
+        )
+
+        temperature: Optional[float] = Field(
+            description="Amount of randomness injected into the response. Defaults to 1.0. Ranges from 0.0 to 1.0. Use temperature closer to 0.0 for analytical / multiple choice, and closer to 1.0 for creative and generative tasks. Note that even with temperature of 0.0, the results will not be fully deterministic.",
+            default=1.0,
+        )
+
+        top_p: Optional[float] = Field(
+            description="Use nucleus sampling. In nucleus sampling, we compute the cumulative distribution over all the options for each subsequent token in decreasing probability order and cut it off once it reaches a particular probability specified by top_p. You should either alter temperature or top_p, but not both. Recommended for advanced use cases only. You usually only need to use temperature.",
+            default=None,
+        )
+
+        top_k: Optional[int] = Field(
+            description="Only sample from the top K options for each subsequent token. Used to remove 'long tail' low probability responses. Recommended for advanced use cases only. You usually only need to use temperature.",
+            default=None,
+        )
+
+        user_id: Optional[str] = Field(
+            description="An external identifier for the user who is associated with the request",
+            default=None,
+        )
+
+        @field_validator("max_tokens")
+        @classmethod
+        def validate_max_tokens(cls, max_tokens):
+            real_max = cls.model_fields["max_tokens"].default
+            if not (0 < max_tokens <= real_max):
+                raise ValueError("max_tokens must be in range 1-{}".format(real_max))
+            return max_tokens
+
+        @field_validator("temperature")
+        @classmethod
+        def validate_temperature(cls, temperature):
+            if not (0.0 <= temperature <= 1.0):
+                raise ValueError("temperature must be in range 0.0-1.0")
+            return temperature
+
+        @field_validator("top_p")
+        @classmethod
+        def validate_top_p(cls, top_p):
+            if top_p is not None and not (0.0 <= top_p <= 1.0):
+                raise ValueError("top_p must be in range 0.0-1.0")
+            return top_p
+
+        @field_validator("top_k")
+        @classmethod
+        def validate_top_k(cls, top_k):
+            if top_k is not None and top_k <= 0:
+                raise ValueError("top_k must be a positive integer")
+            return top_k
+
+        @model_validator(mode="after")
+        def validate_temperature_top_p(self):
+            if self.temperature != 1.0 and self.top_p is not None:
+                raise ValueError("Only one of temperature and top_p can be set")
+            return self
+
+
+    long_field = Field(
+        description="The maximum number of tokens to generate before stopping",
+        default=4_096 * 2,
+    )
+
+
+    class _Shared:
+        needs_key = "claude"
+        key_env_var = "ANTHROPIC_API_KEY"
+        can_stream = True
+
+        class Options(ClaudeOptions): ...
+
+        def __init__(
+            self,
+            model_id,
+            claude_model_id=None,
+            extra_headers=None,
+            supports_images=True,
+            supports_pdf=False,
+        ):
+            self.model_id = model_id
+            self.claude_model_id = claude_model_id or model_id
+            self.extra_headers = extra_headers or {}
+            if supports_pdf:
+                self.extra_headers["anthropic-beta"] = "pdfs-2024-09-25"
+            self.attachment_types = set()
+            if supports_images:
+                self.attachment_types.update(
+                    {
+                        "image/png",
+                        "image/jpeg",
+                        "image/webp",
+                        "image/gif",
+                    }
+                )
+            if supports_pdf:
+                self.attachment_types.add("application/pdf")
+
+        def build_messages(self, prompt, conversation) -> List[dict]:
+            messages = []
+            if conversation:
+                for response in conversation.responses:
+                    if response.attachments:
+                        content = [
+                            {
+                                "type": (
+                                    "document"
+                                    if attachment.resolve_type() == "application/pdf"
+                                    else "image"
+                                ),
+                                "source": {
+                                    "data": attachment.base64_content(),
+                                    "media_type": attachment.resolve_type(),
+                                    "type": "base64",
+                                },
+                            }
+                            for attachment in response.attachments
+                        ]
+                        content.append({"type": "text", "text": response.prompt.prompt})
+                    else:
+                        content = response.prompt.prompt
+                    messages.extend(
+                        [
+                            {
+                                "role": "user",
+                                "content": content,
+                            },
+                            {"role": "assistant", "content": response.text()},
+                        ]
+                    )
+            if prompt.attachments:
+                content = [
+                    {
+                        "type": (
+                            "document"
+                            if attachment.resolve_type() == "application/pdf"
+                            else "image"
+                        ),
+                        "source": {
+                            "data": attachment.base64_content(),
+                            "media_type": attachment.resolve_type(),
+                            "type": "base64",
+                        },
+                    }
+                    for attachment in prompt.attachments
+                ]
+                content.append({"type": "text", "text": prompt.prompt})
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": content,
+                    }
+                )
+            else:
+                messages.append({"role": "user", "content": prompt.prompt})
+            return messages
+
+        def build_kwargs(self, prompt, conversation):
+            kwargs = {
+                "model": self.claude_model_id,
+                "messages": self.build_messages(prompt, conversation),
+                "max_tokens": prompt.options.max_tokens,
+            }
+            if prompt.options.user_id:
+                kwargs["metadata"] = {"user_id": prompt.options.user_id}
+
+            if prompt.options.top_p:
+                kwargs["top_p"] = prompt.options.top_p
+            else:
+                kwargs["temperature"] = prompt.options.temperature
+
+            if prompt.options.top_k:
+                kwargs["top_k"] = prompt.options.top_k
+
+            if prompt.system:
+                kwargs["system"] = prompt.system
+
+            if self.extra_headers:
+                kwargs["extra_headers"] = self.extra_headers
+            return kwargs
+
+        def set_usage(self, response):
+            usage = response.response_json.pop("usage")
+            if usage:
+                response.set_usage(
+                    input=usage.get("input_tokens"), output=usage.get("output_tokens")
+                )
+
+        def __str__(self):
+            return "Anthropic Messages: {}".format(self.model_id)
+
+
+    class ClaudeMessages(_Shared, llm.Model):
+
+        def execute(self, prompt, stream, response, conversation):
+            client = Anthropic(api_key=self.get_key())
+            kwargs = self.build_kwargs(prompt, conversation)
+            if stream:
+                with client.messages.stream(**kwargs) as stream:
+                    for text in stream.text_stream:
+                        yield text
+                    # This records usage and other data:
+                    response.response_json = stream.get_final_message().model_dump()
+            else:
+                completion = client.messages.create(**kwargs)
+                yield completion.content[0].text
+                response.response_json = completion.model_dump()
+            self.set_usage(response)
+
+
+    class ClaudeMessagesLong(ClaudeMessages):
+        class Options(ClaudeOptions):
+            max_tokens: Optional[int] = long_field
+
+
+    class AsyncClaudeMessages(_Shared, llm.AsyncModel):
+        async def execute(self, prompt, stream, response, conversation):
+            client = AsyncAnthropic(api_key=self.get_key())
+            kwargs = self.build_kwargs(prompt, conversation)
+            if stream:
+                async with client.messages.stream(**kwargs) as stream_obj:
+                    async for text in stream_obj.text_stream:
+                        yield text
+                response.response_json = (await stream_obj.get_final_message()).model_dump()
+            else:
+                completion = await client.messages.create(**kwargs)
+                yield completion.content[0].text
+                response.response_json = completion.model_dump()
+            self.set_usage(response)
+
+
+    class AsyncClaudeMessagesLong(AsyncClaudeMessages):
+        class Options(ClaudeOptions):
+            max_tokens: Optional[int] = long_field
+
 </python_file>
+<readme>
+    # llm-claude-3
+
+    [![PyPI](https://img.shields.io/pypi/v/llm-claude-3.svg)](https://pypi.org/project/llm-claude-3/)
+    [![Changelog](https://img.shields.io/github/v/release/simonw/llm-claude-3?include_prereleases&label=changelog)](https://github.com/simonw/llm-claude-3/releases)
+    [![Tests](https://github.com/simonw/llm-claude-3/actions/workflows/test.yml/badge.svg)](https://github.com/simonw/llm-claude-3/actions/workflows/test.yml)
+    [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](https://github.com/simonw/llm-claude-3/blob/main/LICENSE)
+
+    LLM access to Claude 3 by Anthropic
+
+    ## Installation
+
+    Install this plugin in the same environment as [LLM](https://llm.datasette.io/).
+    ```bash
+    llm install llm-claude-3
+    ```
+
+    ## Usage
+
+    First, set [an API key](https://console.anthropic.com/settings/keys) for Claude 3:
+    ```bash
+    llm keys set claude
+    # Paste key here
+    ```
+
+    You can also set the key in the environment variable `ANTHROPIC_API_KEY`
+
+    Run `llm models` to list the models, and `llm models --options` to include a list of their options.
+
+    Run prompts like this:
+    ```bash
+    llm -m claude-3.5-sonnet 'Fun facts about pelicans'
+    llm -m claude-3.5-haiku 'Fun facts about armadillos'
+    llm -m claude-3-opus 'Fun facts about squirrels'
+    ```
+    Images are supported too:
+    ```bash
+    llm -m claude-3.5-sonnet 'describe this image' -a https://static.simonwillison.net/static/2024/pelicans.jpg
+    llm -m claude-3-haiku 'extract text' -a page.png
+    ```
+
+    ## Development
+
+    To set up this plugin locally, first checkout the code. Then create a new virtual environment:
+    ```bash
+    cd llm-claude-3
+    python3 -m venv venv
+    source venv/bin/activate
+    ```
+    Now install the dependencies and test dependencies:
+    ```bash
+    llm install -e '.[test]'
+    ```
+    To run the tests:
+    ```bash
+    pytest
+    ```
+
+    This project uses [pytest-recording](https://github.com/kiwicom/pytest-recording) to record Anthropic API responses for the tests.
+
+    If you add a new test that calls the API you can capture the API response like this:
+    ```bash
+    PYTEST_ANTHROPIC_API_KEY="$(llm keys get claude)" pytest --record-mode once
+    ```
+    You will need to have stored a valid Anthropic API key using this command first:
+    ```bash
+    llm keys set claude
+    # Paste key here
+    ```
+</readme>
 </plugin>
 <plugin name="llm-command-r">
-<readme>
-  # llm-command-r
-  
-  [![PyPI](https://img.shields.io/pypi/v/llm-command-r.svg)](https://pypi.org/project/llm-command-r/)
-  [![Changelog](https://img.shields.io/github/v/release/simonw/llm-command-r?include_prereleases&amp;label=changelog)](https://github.com/simonw/llm-command-r/releases)
-  [![Tests](https://github.com/simonw/llm-command-r/actions/workflows/test.yml/badge.svg)](https://github.com/simonw/llm-command-r/actions/workflows/test.yml)
-  [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](https://github.com/simonw/llm-command-r/blob/main/LICENSE)
-  
-  Access the [Cohere Command R](https://docs.cohere.com/docs/command-r) family of models via the Cohere API
-  
-  ## Installation
-  
-  Install this plugin in the same environment as [LLM](https://llm.datasette.io/).
-  ```bash
-  llm install llm-command-r
-  ```
-  
-  ## Configuration
-  
-  You will need a [Cohere API key](https://dashboard.cohere.com/api-keys). Configure it like this:
-  
-  ```bash
-  llm keys set cohere
-  # Paste key here
-  ```
-  
-  ## Usage
-  
-  This plugin adds two models.
-  
-  ```bash
-  llm -m command-r 'Say hello from Command R'
-  llm -m command-r-plus 'Say hello from Command R Plus'
-  ```
-  
-  The Command R models have the ability to search the web as part of answering a prompt.
-  
-  You can enable this feature using the `-o websearch 1` option to the models:
-  
-  ```bash
-  llm -m command-r 'What is the LLM CLI tool?' -o websearch 1
-  ```
-  Running a search costs more as it involves spending tokens including the search results in the prompt.
-  
-  The full search results are stored as JSON [in the LLM logs](https://llm.datasette.io/en/stable/logging.html).
-  
-  You can also use the `command-r-search` command provided by this plugin to see a list of documents that were used to answer your question as part of the output:
-  
-  ```bash
-  llm command-r-search 'What is the LLM CLI tool by simonw?'
-  ```
-  Example output:
-  
-  &gt; The LLM CLI tool is a command-line utility that allows users to access large language models. It was created by Simon Willison and can be installed via pip, Homebrew or pipx. The tool supports interactions with remote APIs and models that can be locally installed and run. Users can run prompts from the command line and even build an image search engine using the CLI tool.
-  &gt;
-  &gt; Sources:
-  &gt;
-  &gt; - GitHub - simonw/llm: Access large language models from the command-line - https://github.com/simonw/llm
-  &gt; - llm, ttok and strip-tags—CLI tools for working with ChatGPT and other LLMs - https://simonwillison.net/2023/May/18/cli-tools-for-llms/
-  &gt; - Sherwood Callaway on LinkedIn: GitHub - simonw/llm: Access large language models from the command-line - https://www.linkedin.com/posts/sherwoodcallaway_github-simonwllm-access-large-language-activity-7104448041041960960-2WRG
-  &gt; - LLM Python/CLI tool adds support for embeddings | Hacker News - https://news.ycombinator.com/item?id=37384797
-  &gt; - CLI tools for working with ChatGPT and other LLMs | Hacker News - https://news.ycombinator.com/item?id=35994037
-  &gt; - GitHub - simonw/homebrew-llm: Homebrew formulas for installing LLM and related tools - https://github.com/simonw/homebrew-llm
-  &gt; - LLM: A CLI utility and Python library for interacting with Large Language Models - https://llm.datasette.io/en/stable/
-  &gt; - GitHub - simonw/llm-prompts: A collection of prompts for use with the LLM CLI tool - https://github.com/simonw/llm-prompts
-  &gt; - GitHub - simonw/llm-cmd: Use LLM to generate and execute commands in your shell - https://github.com/simonw/llm-cmd
-  
-  ## Development
-  
-  To set up this plugin locally, first checkout the code. Then create a new virtual environment:
-  ```bash
-  cd llm-command-r
-  python3 -m venv venv
-  source venv/bin/activate
-  ```
-  Now install the dependencies and test dependencies:
-  ```bash
-  llm install -e '.[test]'
-  ```
-  To run the tests:
-  ```bash
-  pytest
-  ```
-  
-</readme>
 <python_file name="llm_command_r.py">
   import click
   import cohere
@@ -437,99 +496,78 @@
           return "Cohere Messages: {}".format(self.model_id)
   
 </python_file>
-</plugin>
-<plugin name="llm-mistral">
 <readme>
-  # llm-mistral
+  # llm-command-r
   
-  [![PyPI](https://img.shields.io/pypi/v/llm-mistral.svg)](https://pypi.org/project/llm-mistral/)
-  [![Changelog](https://img.shields.io/github/v/release/simonw/llm-mistral?include_prereleases&amp;label=changelog)](https://github.com/simonw/llm-mistral/releases)
-  [![Tests](https://github.com/simonw/llm-mistral/workflows/Test/badge.svg)](https://github.com/simonw/llm-mistral/actions?query=workflow%3ATest)
-  [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](https://github.com/simonw/llm-mistral/blob/main/LICENSE)
+  [![PyPI](https://img.shields.io/pypi/v/llm-command-r.svg)](https://pypi.org/project/llm-command-r/)
+  [![Changelog](https://img.shields.io/github/v/release/simonw/llm-command-r?include_prereleases&amp;label=changelog)](https://github.com/simonw/llm-command-r/releases)
+  [![Tests](https://github.com/simonw/llm-command-r/actions/workflows/test.yml/badge.svg)](https://github.com/simonw/llm-command-r/actions/workflows/test.yml)
+  [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](https://github.com/simonw/llm-command-r/blob/main/LICENSE)
   
-  [LLM](https://llm.datasette.io/) plugin providing access to [Mistral](https://mistral.ai) models using the Mistral API
+  Access the [Cohere Command R](https://docs.cohere.com/docs/command-r) family of models via the Cohere API
   
   ## Installation
   
-  Install this plugin in the same environment as LLM:
+  Install this plugin in the same environment as [LLM](https://llm.datasette.io/).
   ```bash
-  llm install llm-mistral
+  llm install llm-command-r
   ```
+  
+  ## Configuration
+  
+  You will need a [Cohere API key](https://dashboard.cohere.com/api-keys). Configure it like this:
+  
+  ```bash
+  llm keys set cohere
+  # Paste key here
+  ```
+  
   ## Usage
   
-  First, obtain an API key for [the Mistral API](https://console.mistral.ai/).
-  
-  Configure the key using the `llm keys set mistral` command:
-  ```bash
-  llm keys set mistral
-  ```
-  ```
-  &lt;paste key here&gt;
-  ```
-  You can now access the Mistral hosted models. Run `llm models` for a list.
-  
-  To run a prompt through `mistral-tiny`:
+  This plugin adds two models.
   
   ```bash
-  llm -m mistral-tiny 'A sassy name for a pet sasquatch'
+  llm -m command-r 'Say hello from Command R'
+  llm -m command-r-plus 'Say hello from Command R Plus'
   ```
-  To start an interactive chat session with `mistral-small`:
-  ```bash
-  llm chat -m mistral-small
-  ```
-  ```
-  Chatting with mistral-small
-  Type 'exit' or 'quit' to exit
-  Type '!multi' to enter multiple lines, then '!end' to finish
-  &gt; three proud names for a pet walrus
-  1. "Nanuq," the Inuit word for walrus, which symbolizes strength and resilience.
-  2. "Sir Tuskalot," a playful and regal name that highlights the walrus' distinctive tusks.
-  3. "Glacier," a name that reflects the walrus' icy Arctic habitat and majestic presence.
-  ```
-  To use a system prompt with `mistral-medium` to explain some code:
-  ```bash
-  cat example.py | llm -m mistral-medium -s 'explain this code'
-  ```
-  ## Model options
   
-  All three models accept the following options, using `-o name value` syntax:
+  The Command R models have the ability to search the web as part of answering a prompt.
   
-  - `-o temperature 0.7`: The sampling temperature, between 0 and 1. Higher increases randomness, lower values are more focused and deterministic.
-  - `-o top_p 0.1`: 0.1 means consider only tokens in the top 10% probability mass. Use this or temperature but not both.
-  - `-o max_tokens 20`: Maximum number of tokens to generate in the completion.
-  - `-o safe_mode 1`: Turns on [safe mode](https://docs.mistral.ai/platform/guardrailing/), which adds a system prompt to add guardrails to the model output.
-  - `-o random_seed 123`: Set an integer random seed to generate deterministic results.
-  
-  ## Refreshing the model list
-  
-  Mistral sometimes release new models.
-  
-  To make those models available to an existing installation of `llm-mistral` run this command:
-  ```bash
-  llm mistral refresh
-  ```
-  This will fetch and cache the latest list of available models. They should then become available in the output of the `llm models` command.
-  
-  ## Embeddings
-  
-  The Mistral [Embeddings API](https://docs.mistral.ai/platform/client#embeddings) can be used to generate 1,024 dimensional embeddings for any text.
-  
-  To embed a single string:
+  You can enable this feature using the `-o websearch 1` option to the models:
   
   ```bash
-  llm embed -m mistral-embed -c 'this is text'
+  llm -m command-r 'What is the LLM CLI tool?' -o websearch 1
   ```
-  This will return a JSON array of 1,024 floating point numbers.
+  Running a search costs more as it involves spending tokens including the search results in the prompt.
   
-  The [LLM documentation](https://llm.datasette.io/en/stable/embeddings/index.html) has more, including how to embed in bulk and store the results in a SQLite database.
+  The full search results are stored as JSON [in the LLM logs](https://llm.datasette.io/en/stable/logging.html).
   
-  See [LLM now provides tools for working with embeddings](https://simonwillison.net/2023/Sep/4/llm-embeddings/) and [Embeddings: What they are and why they matter](https://simonwillison.net/2023/Oct/23/embeddings/) for more about embeddings.
+  You can also use the `command-r-search` command provided by this plugin to see a list of documents that were used to answer your question as part of the output:
+  
+  ```bash
+  llm command-r-search 'What is the LLM CLI tool by simonw?'
+  ```
+  Example output:
+  
+  &gt; The LLM CLI tool is a command-line utility that allows users to access large language models. It was created by Simon Willison and can be installed via pip, Homebrew or pipx. The tool supports interactions with remote APIs and models that can be locally installed and run. Users can run prompts from the command line and even build an image search engine using the CLI tool.
+  &gt;
+  &gt; Sources:
+  &gt;
+  &gt; - GitHub - simonw/llm: Access large language models from the command-line - https://github.com/simonw/llm
+  &gt; - llm, ttok and strip-tags—CLI tools for working with ChatGPT and other LLMs - https://simonwillison.net/2023/May/18/cli-tools-for-llms/
+  &gt; - Sherwood Callaway on LinkedIn: GitHub - simonw/llm: Access large language models from the command-line - https://www.linkedin.com/posts/sherwoodcallaway_github-simonwllm-access-large-language-activity-7104448041041960960-2WRG
+  &gt; - LLM Python/CLI tool adds support for embeddings | Hacker News - https://news.ycombinator.com/item?id=37384797
+  &gt; - CLI tools for working with ChatGPT and other LLMs | Hacker News - https://news.ycombinator.com/item?id=35994037
+  &gt; - GitHub - simonw/homebrew-llm: Homebrew formulas for installing LLM and related tools - https://github.com/simonw/homebrew-llm
+  &gt; - LLM: A CLI utility and Python library for interacting with Large Language Models - https://llm.datasette.io/en/stable/
+  &gt; - GitHub - simonw/llm-prompts: A collection of prompts for use with the LLM CLI tool - https://github.com/simonw/llm-prompts
+  &gt; - GitHub - simonw/llm-cmd: Use LLM to generate and execute commands in your shell - https://github.com/simonw/llm-cmd
   
   ## Development
   
   To set up this plugin locally, first checkout the code. Then create a new virtual environment:
   ```bash
-  cd llm-mistral
+  cd llm-command-r
   python3 -m venv venv
   source venv/bin/activate
   ```
@@ -543,6 +581,8 @@
   ```
   
 </readme>
+</plugin>
+<plugin name="llm-mistral">
 <python_file name="llm_mistral.py">
   import click
   from httpx_sse import connect_sse
@@ -791,5 +831,607 @@
               return [item["embedding"] for item in api_response.json()["data"]]
   
 </python_file>
+<readme>
+  # llm-mistral
+  
+  [![PyPI](https://img.shields.io/pypi/v/llm-mistral.svg)](https://pypi.org/project/llm-mistral/)
+  [![Changelog](https://img.shields.io/github/v/release/simonw/llm-mistral?include_prereleases&amp;label=changelog)](https://github.com/simonw/llm-mistral/releases)
+  [![Tests](https://github.com/simonw/llm-mistral/workflows/Test/badge.svg)](https://github.com/simonw/llm-mistral/actions?query=workflow%3ATest)
+  [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](https://github.com/simonw/llm-mistral/blob/main/LICENSE)
+  
+  [LLM](https://llm.datasette.io/) plugin providing access to [Mistral](https://mistral.ai) models using the Mistral API
+  
+  ## Installation
+  
+  Install this plugin in the same environment as LLM:
+  ```bash
+  llm install llm-mistral
+  ```
+  ## Usage
+  
+  First, obtain an API key for [the Mistral API](https://console.mistral.ai/).
+  
+  Configure the key using the `llm keys set mistral` command:
+  ```bash
+  llm keys set mistral
+  ```
+  ```
+  &lt;paste key here&gt;
+  ```
+  You can now access the Mistral hosted models. Run `llm models` for a list.
+  
+  To run a prompt through `mistral-tiny`:
+  
+  ```bash
+  llm -m mistral-tiny 'A sassy name for a pet sasquatch'
+  ```
+  To start an interactive chat session with `mistral-small`:
+  ```bash
+  llm chat -m mistral-small
+  ```
+  ```
+  Chatting with mistral-small
+  Type 'exit' or 'quit' to exit
+  Type '!multi' to enter multiple lines, then '!end' to finish
+  &gt; three proud names for a pet walrus
+  1. "Nanuq," the Inuit word for walrus, which symbolizes strength and resilience.
+  2. "Sir Tuskalot," a playful and regal name that highlights the walrus' distinctive tusks.
+  3. "Glacier," a name that reflects the walrus' icy Arctic habitat and majestic presence.
+  ```
+  To use a system prompt with `mistral-medium` to explain some code:
+  ```bash
+  cat example.py | llm -m mistral-medium -s 'explain this code'
+  ```
+  ## Model options
+  
+  All three models accept the following options, using `-o name value` syntax:
+  
+  - `-o temperature 0.7`: The sampling temperature, between 0 and 1. Higher increases randomness, lower values are more focused and deterministic.
+  - `-o top_p 0.1`: 0.1 means consider only tokens in the top 10% probability mass. Use this or temperature but not both.
+  - `-o max_tokens 20`: Maximum number of tokens to generate in the completion.
+  - `-o safe_mode 1`: Turns on [safe mode](https://docs.mistral.ai/platform/guardrailing/), which adds a system prompt to add guardrails to the model output.
+  - `-o random_seed 123`: Set an integer random seed to generate deterministic results.
+  
+  ## Refreshing the model list
+  
+  Mistral sometimes release new models.
+  
+  To make those models available to an existing installation of `llm-mistral` run this command:
+  ```bash
+  llm mistral refresh
+  ```
+  This will fetch and cache the latest list of available models. They should then become available in the output of the `llm models` command.
+  
+  ## Embeddings
+  
+  The Mistral [Embeddings API](https://docs.mistral.ai/platform/client#embeddings) can be used to generate 1,024 dimensional embeddings for any text.
+  
+  To embed a single string:
+  
+  ```bash
+  llm embed -m mistral-embed -c 'this is text'
+  ```
+  This will return a JSON array of 1,024 floating point numbers.
+  
+  The [LLM documentation](https://llm.datasette.io/en/stable/embeddings/index.html) has more, including how to embed in bulk and store the results in a SQLite database.
+  
+  See [LLM now provides tools for working with embeddings](https://simonwillison.net/2023/Sep/4/llm-embeddings/) and [Embeddings: What they are and why they matter](https://simonwillison.net/2023/Oct/23/embeddings/) for more about embeddings.
+  
+  ## Development
+  
+  To set up this plugin locally, first checkout the code. Then create a new virtual environment:
+  ```bash
+  cd llm-mistral
+  python3 -m venv venv
+  source venv/bin/activate
+  ```
+  Now install the dependencies and test dependencies:
+  ```bash
+  llm install -e '.[test]'
+  ```
+  To run the tests:
+  ```bash
+  pytest
+  ```
+  
+</readme>
+</plugin>
+<plugin name="llm-gemini">
+<python_file name="llm_gemini.py">
+    import httpx
+    import ijson
+    import llm
+    from pydantic import Field
+    from typing import Optional
+
+    SAFETY_SETTINGS = [
+        {
+            "category": "HARM_CATEGORY_DANGEROUS_CONTENT",
+            "threshold": "BLOCK_NONE",
+        },
+        {
+            "category": "HARM_CATEGORY_SEXUALLY_EXPLICIT",
+            "threshold": "BLOCK_NONE",
+        },
+        {
+            "category": "HARM_CATEGORY_HATE_SPEECH",
+            "threshold": "BLOCK_NONE",
+        },
+        {
+            "category": "HARM_CATEGORY_HARASSMENT",
+            "threshold": "BLOCK_NONE",
+        },
+    ]
+
+
+    @llm.hookimpl
+    def register_models(register):
+        # Register both sync and async versions of each model
+        for model_id in [
+            "gemini-pro",
+            "gemini-1.5-pro-latest",
+            "gemini-1.5-flash-latest",
+            "gemini-1.5-pro-001",
+            "gemini-1.5-flash-001",
+            "gemini-1.5-pro-002",
+            "gemini-1.5-flash-002",
+            "gemini-1.5-flash-8b-latest",
+            "gemini-1.5-flash-8b-001",
+            "gemini-exp-1114",
+            "gemini-exp-1121",
+            "gemini-exp-1206",
+            "gemini-2.0-flash-exp",
+            "gemini-2.0-flash-thinking-exp-1219",
+        ]:
+            register(GeminiPro(model_id), AsyncGeminiPro(model_id))
+
+
+    def resolve_type(attachment):
+        mime_type = attachment.resolve_type()
+        # https://github.com/simonw/llm/issues/587#issuecomment-2439785140
+        if mime_type == "audio/mpeg":
+            mime_type = "audio/mp3"
+        return mime_type
+
+
+    class _SharedGemini:
+        needs_key = "gemini"
+        key_env_var = "LLM_GEMINI_KEY"
+        can_stream = True
+
+        attachment_types = (
+            # PDF
+            "application/pdf",
+            # Images
+            "image/png",
+            "image/jpeg",
+            "image/webp",
+            "image/heic",
+            "image/heif",
+            # Audio
+            "audio/wav",
+            "audio/mp3",
+            "audio/aiff",
+            "audio/aac",
+            "audio/ogg",
+            "audio/flac",
+            "audio/mpeg",  # Treated as audio/mp3
+            # Video
+            "video/mp4",
+            "video/mpeg",
+            "video/mov",
+            "video/avi",
+            "video/x-flv",
+            "video/mpg",
+            "video/webm",
+            "video/wmv",
+            "video/3gpp",
+            "video/quicktime",
+        )
+
+        class Options(llm.Options):
+            code_execution: Optional[bool] = Field(
+                description="Enables the model to generate and run Python code",
+                default=None,
+            )
+            temperature: Optional[float] = Field(
+                description=(
+                    "Controls the randomness of the output. Use higher values for "
+                    "more creative responses, and lower values for more "
+                    "deterministic responses."
+                ),
+                default=None,
+                ge=0.0,
+                le=2.0,
+            )
+            max_output_tokens: Optional[int] = Field(
+                description="Sets the maximum number of tokens to include in a candidate.",
+                default=None,
+            )
+            top_p: Optional[float] = Field(
+                description=(
+                    "Changes how the model selects tokens for output. Tokens are "
+                    "selected from the most to least probable until the sum of "
+                    "their probabilities equals the topP value."
+                ),
+                default=None,
+                ge=0.0,
+                le=1.0,
+            )
+            top_k: Optional[int] = Field(
+                description=(
+                    "Changes how the model selects tokens for output. A topK of 1 "
+                    "means the selected token is the most probable among all the "
+                    "tokens in the model's vocabulary, while a topK of 3 means "
+                    "that the next token is selected from among the 3 most "
+                    "probable using the temperature."
+                ),
+                default=None,
+                ge=1,
+            )
+            json_object: Optional[bool] = Field(
+                description="Output a valid JSON object {...}",
+                default=None,
+            )
+
+        def __init__(self, model_id):
+            self.model_id = model_id
+
+        def build_messages(self, prompt, conversation):
+            messages = []
+            if conversation:
+                for response in conversation.responses:
+                    parts = []
+                    for attachment in response.attachments:
+                        mime_type = resolve_type(attachment)
+                        parts.append(
+                            {
+                                "inlineData": {
+                                    "data": attachment.base64_content(),
+                                    "mimeType": mime_type,
+                                }
+                            }
+                        )
+                    if response.prompt.prompt:
+                        parts.append({"text": response.prompt.prompt})
+                    messages.append({"role": "user", "parts": parts})
+                    messages.append({"role": "model", "parts": [{"text": response.text_or_raise()}]})
+
+            parts = []
+            if prompt.prompt:
+                parts.append({"text": prompt.prompt})
+            for attachment in prompt.attachments:
+                mime_type = resolve_type(attachment)
+                parts.append(
+                    {
+                        "inlineData": {
+                            "data": attachment.base64_content(),
+                            "mimeType": mime_type,
+                        }
+                    }
+                )
+
+            messages.append({"role": "user", "parts": parts})
+            return messages
+
+        def build_request_body(self, prompt, conversation):
+            body = {
+                "contents": self.build_messages(prompt, conversation),
+                "safetySettings": SAFETY_SETTINGS,
+            }
+            if prompt.options and prompt.options.code_execution:
+                body["tools"] = [{"codeExecution": {}}]
+            if prompt.system:
+                body["systemInstruction"] = {"parts": [{"text": prompt.system}]}
+
+            config_map = {
+                "temperature": "temperature",
+                "max_output_tokens": "maxOutputTokens",
+                "top_p": "topP",
+                "top_k": "topK",
+            }
+            if prompt.options and prompt.options.json_object:
+                body["generationConfig"] = {"response_mime_type": "application/json"}
+
+            if any(
+                getattr(prompt.options, key, None) is not None for key in config_map.keys()
+            ):
+                generation_config = {}
+                for key, other_key in config_map.items():
+                    config_value = getattr(prompt.options, key, None)
+                    if config_value is not None:
+                        generation_config[other_key] = config_value
+                body["generationConfig"] = generation_config
+
+            return body
+
+        def process_part(self, part):
+            if "text" in part:
+                return part["text"]
+            elif "executableCode" in part:
+                return f'```{part["executableCode"]["language"].lower()}\n{part["executableCode"]["code"].strip()}\n```\n'
+            elif "codeExecutionResult" in part:
+                return f'```\n{part["codeExecutionResult"]["output"].strip()}\n```\n'
+            return ""
+
+        def set_usage(self, response):
+            try:
+                usage = response.response_json[-1].pop("usageMetadata")
+                input_tokens = usage.pop("promptTokenCount", None)
+                output_tokens = usage.pop("candidatesTokenCount", None)
+                usage.pop("totalTokenCount", None)
+                if input_tokens is not None:
+                    response.set_usage(
+                        input=input_tokens, output=output_tokens, details=usage or None
+                    )
+            except (IndexError, KeyError):
+                pass
+
+
+    class GeminiPro(_SharedGemini, llm.Model):
+        def execute(self, prompt, stream, response, conversation):
+            key = self.get_key()
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/{self.model_id}:streamGenerateContent"
+            gathered = []
+            body = self.build_request_body(prompt, conversation)
+
+            with httpx.stream(
+                "POST",
+                url,
+                timeout=None,
+                headers={"x-goog-api-key": key},
+                json=body,
+            ) as http_response:
+                events = ijson.sendable_list()
+                coro = ijson.items_coro(events, "item")
+                for chunk in http_response.iter_bytes():
+                    coro.send(chunk)
+                    if events:
+                        event = events[0]
+                        if isinstance(event, dict) and "error" in event:
+                            raise llm.ModelError(event["error"]["message"])
+                        try:
+                            part = event["candidates"][0]["content"]["parts"][0]
+                            yield self.process_part(part)
+                        except KeyError:
+                            yield ""
+                        gathered.append(event)
+                        events.clear()
+            response.response_json = gathered
+            self.set_usage(response)
+
+
+    class AsyncGeminiPro(_SharedGemini, llm.AsyncModel):
+        async def execute(self, prompt, stream, response, conversation):
+            key = self.get_key()
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/{self.model_id}:streamGenerateContent"
+            gathered = []
+            body = self.build_request_body(prompt, conversation)
+
+            async with httpx.AsyncClient() as client:
+                async with client.stream(
+                    "POST",
+                    url,
+                    timeout=None,
+                    headers={"x-goog-api-key": key},
+                    json=body,
+                ) as http_response:
+                    events = ijson.sendable_list()
+                    coro = ijson.items_coro(events, "item")
+                    async for chunk in http_response.aiter_bytes():
+                        coro.send(chunk)
+                        if events:
+                            event = events[0]
+                            if isinstance(event, dict) and "error" in event:
+                                raise llm.ModelError(event["error"]["message"])
+                            try:
+                                part = event["candidates"][0]["content"]["parts"][0]
+                                yield self.process_part(part)
+                            except KeyError:
+                                yield ""
+                            gathered.append(event)
+                            events.clear()
+            response.response_json = gathered
+            self.set_usage(response)
+
+
+    @llm.hookimpl
+    def register_embedding_models(register):
+        register(
+            GeminiEmbeddingModel("text-embedding-004", "text-embedding-004"),
+        )
+
+
+    class GeminiEmbeddingModel(llm.EmbeddingModel):
+        needs_key = "gemini"
+        key_env_var = "LLM_GEMINI_KEY"
+        batch_size = 20
+
+        def __init__(self, model_id, gemini_model_id):
+            self.model_id = model_id
+            self.gemini_model_id = gemini_model_id
+
+        def embed_batch(self, items):
+            headers = {
+                "Content-Type": "application/json",
+                "x-goog-api-key": self.get_key(),
+            }
+            data = {
+                "requests": [
+                    {
+                        "model": "models/" + self.gemini_model_id,
+                        "content": {"parts": [{"text": item}]},
+                    }
+                    for item in items
+                ]
+            }
+
+            with httpx.Client() as client:
+                response = client.post(
+                    f"https://generativelanguage.googleapis.com/v1beta/models/{self.gemini_model_id}:batchEmbedContents",
+                    headers=headers,
+                    json=data,
+                    timeout=None,
+                )
+
+            response.raise_for_status()
+            return [item["values"] for item in response.json()["embeddings"]]
+</python_file>
+<readme>
+    # llm-gemini
+
+    [![PyPI](https://img.shields.io/pypi/v/llm-gemini.svg)](https://pypi.org/project/llm-gemini/)
+    [![Changelog](https://img.shields.io/github/v/release/simonw/llm-gemini?include_prereleases&label=changelog)](https://github.com/simonw/llm-gemini/releases)
+    [![Tests](https://github.com/simonw/llm-gemini/workflows/Test/badge.svg)](https://github.com/simonw/llm-gemini/actions?query=workflow%3ATest)
+    [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](https://github.com/simonw/llm-gemini/blob/main/LICENSE)
+
+    API access to Google's Gemini models
+
+    ## Installation
+
+    Install this plugin in the same environment as [LLM](https://llm.datasette.io/).
+    ```bash
+    llm install llm-gemini
+    ```
+    ## Usage
+
+    Configure the model by setting a key called "gemini" to your [API key](https://aistudio.google.com/app/apikey):
+    ```bash
+    llm keys set gemini
+    ```
+    ```
+    <paste key here>
+    ```
+    You can also set the API key by assigning it to the environment variable `LLM_GEMINI_KEY`.
+
+    Now run the model using `-m gemini-1.5-pro-latest`, for example:
+
+    ```bash
+    llm -m gemini-1.5-pro-latest "A joke about a pelican and a walrus"
+    ```
+
+    > A pelican walks into a seafood restaurant with a huge fish hanging out of its beak.  The walrus, sitting at the bar, eyes it enviously.
+    >
+    > "Hey," the walrus says, "That looks delicious! What kind of fish is that?"
+    >
+    > The pelican taps its beak thoughtfully. "I believe," it says, "it's a billfish."
+
+    Other models are:
+
+    - `gemini-1.5-flash-latest`
+    - `gemini-1.5-flash-8b-latest` - the least expensive
+    - `gemini-exp-1114` - recent experimental #1
+    - `gemini-exp-1121` - recent experimental #2
+    - `gemini-exp-1206` - recent experimental #3
+    - `gemini-2.0-flash-exp` - [Gemini 2.0 Flash](https://blog.google/technology/google-deepmind/google-gemini-ai-update-december-2024/#gemini-2-0-flash)
+
+    ### Images, audio and video
+
+    Gemini models are multi-modal. You can provide images, audio or video files as input like this:
+
+    ```bash
+    llm -m gemini-1.5-flash-latest 'extract text' -a image.jpg
+    ```
+    Or with a URL:
+    ```bash
+    llm -m gemini-1.5-flash-8b-latest 'describe image' \
+    -a https://static.simonwillison.net/static/2024/pelicans.jpg
+    ```
+    Audio works too:
+
+    ```bash
+    llm -m gemini-1.5-pro-latest 'transcribe audio' -a audio.mp3
+    ```
+
+    And video:
+
+    ```bash
+    llm -m gemini-1.5-pro-latest 'describe what happens' -a video.mp4
+    ```
+    The Gemini prompting guide includes [extensive advice](https://ai.google.dev/gemini-api/docs/file-prompting-strategies) on multi-modal prompting.
+
+    ### JSON output
+
+    Use `-o json_object 1` to force the output to be JSON:
+
+    ```bash
+    llm -m gemini-1.5-flash-latest -o json_object 1 \
+    '3 largest cities in California, list of {"name": "..."}'
+    ```
+    Outputs:
+    ```json
+    {"cities": [{"name": "Los Angeles"}, {"name": "San Diego"}, {"name": "San Jose"}]}
+    ```
+
+    ### Code execution
+
+    Gemini models can [write and execute code](https://ai.google.dev/gemini-api/docs/code-execution) - they can decide to write Python code, execute it in a secure sandbox and use the result as part of their response.
+
+    To enable this feature, use `-o code_execution 1`:
+
+    ```bash
+    llm -m gemini-1.5-pro-latest -o code_execution 1 \
+    'use python to calculate (factorial of 13) * 3'
+    ```
+
+    ### Chat
+
+    To chat interactively with the model, run `llm chat`:
+
+    ```bash
+    llm chat -m gemini-1.5-pro-latest
+    ```
+
+    ## Embeddings
+
+    The plugin also adds support for the `text-embedding-004` embedding model.
+
+    Run that against a single string like this:
+    ```bash
+    llm embed -m text-embedding-004 -c 'hello world'
+    ```
+    This returns a JSON array of 768 numbers.
+
+    This command will embed every `README.md` file in child directories of the current directory and store the results in a SQLite database called `embed.db` in a collection called `readmes`:
+
+    ```bash
+    llm embed-multi readmes --files . '*/README.md' -d embed.db -m text-embedding-004
+    ```
+    You can then run similarity searches against that collection like this:
+    ```bash
+    llm similar readmes -c 'upload csvs to stuff' -d embed.db
+    ```
+
+    See the [LLM embeddings documentation](https://llm.datasette.io/en/stable/embeddings/cli.html) for further details.
+
+    ## Development
+
+    To set up this plugin locally, first checkout the code. Then create a new virtual environment:
+    ```bash
+    cd llm-gemini
+    python3 -m venv venv
+    source venv/bin/activate
+    ```
+    Now install the dependencies and test dependencies:
+    ```bash
+    llm install -e '.[test]'
+    ```
+    To run the tests:
+    ```bash
+    pytest
+    ```
+
+    This project uses [pytest-recording](https://github.com/kiwicom/pytest-recording) to record Gemini API responses for the tests.
+
+    If you add a new test that calls the API you can capture the API response like this:
+    ```bash
+    PYTEST_GEMINI_API_KEY="$(llm keys get gemini)" pytest --record-mode once
+    ```
+    You will need to have stored a valid Gemini API key using this command first:
+    ```bash
+    llm keys set gemini
+    # Paste key here
+    ```
+</readme>
 </plugin>
 </few_shot_prompt>
